@@ -18,7 +18,7 @@ Wi-Fi. Connect the two to any image-capable MCP agent.
 
 ## See it work
 
-[Watch the real-device demo](https://github.com/semsturgut/open-iphone-use/releases/download/v0.0.1/open-iphone-use-instagram-demo.mp4)
+[Watch the real-device demo](https://github.com/semsturgut/open-iphone-use/releases/download/v0.0.1/open-iphone-use-instagram-demo.mov)
 
 The demo searches Instagram in English for food, opens a cooking video, watches it,
 advances to another video, and likes a food video. Actions go through the bundled MCP
