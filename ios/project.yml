@@ -1,0 +1,59 @@
+name: OpenIPhoneUse
+options:
+  bundleIdPrefix: dev.openiphoneuse
+  deploymentTarget:
+    iOS: '18.0'
+configs:
+  Debug: debug
+  Release: release
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    TARGETED_DEVICE_FAMILY: '1'
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: '1'
+    MARKETING_VERSION: '0.0.1'
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+targets:
+  OpenIPhoneUse:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: ["Info*.plist"]
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(OPEN_IPHONE_USE_BUNDLE_ID)
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/OpenIPhoneUse.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: OpenIPhoneUseBroadcast
+        embed: true
+  OpenIPhoneUseBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Broadcast
+        excludes: ["Info*.plist"]
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(OPEN_IPHONE_USE_BUNDLE_ID).broadcast
+        INFOPLIST_FILE: Broadcast/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Broadcast/Broadcast.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+schemes:
+  OpenIPhoneUse:
+    build:
+      targets:
+        OpenIPhoneUse: all
+    run:
+      config: Debug

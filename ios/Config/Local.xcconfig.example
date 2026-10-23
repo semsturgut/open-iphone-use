@@ -1,0 +1,4 @@
+// Copy to Local.xcconfig. Choose identifiers and an App Group registered to your development team.
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+OPEN_IPHONE_USE_BUNDLE_ID = your.domain.open-iphone-use
+OPEN_IPHONE_USE_APP_GROUP = group.your.domain.open-iphone-use

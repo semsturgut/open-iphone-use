@@ -1,0 +1,26 @@
+name: Mac bridge
+on:
+  push:
+    paths: ['macos/**', '.github/workflows/macos.yml']
+  pull_request:
+    paths: ['macos/**', '.github/workflows/macos.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: swift test
+      - run: swift build -c release
+      - run: node scripts/test-capture-page.mjs
+      - run: python3 scripts/test-agent-mcp.py .build/release/open-iphone-use-mcp
+      - name: Build development app bundle
+        run: ./build-app.sh "$RUNNER_TEMP/OpenIPhoneUse.app"

@@ -1,0 +1,3 @@
+OPEN_IPHONE_USE_BUNDLE_ID = dev.openiphoneuse.capture
+OPEN_IPHONE_USE_APP_GROUP = group.dev.openiphoneuse.capture
+#include? "Local.xcconfig"
