@@ -177,7 +177,7 @@ Use that installation's helper path when configuring MCP. To build the DMG:
 ./build-dmg.sh
 ```
 
-Xcode's Swift toolchain and macOS are required. [Mac development](macos/README.md),
+Xcode 26.2 (including its SDK and Swift toolchain) and macOS are required to build from source. [Mac development](macos/README.md),
 [contributing](CONTRIBUTING.md), [architecture](docs/architecture.md), [security](SECURITY.md).
 
 ## Roadmap
