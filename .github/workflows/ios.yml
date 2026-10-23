@@ -19,4 +19,4 @@ jobs:
           /tmp/capture-check
       - run: xcodegen generate --spec ios/project.yml
       - name: Build app and broadcast extension without signing
-        run: xcodebuild -project ios/OpenIPhoneUse.xcodeproj -scheme Open iPhone Use -sdk iphonesimulator -configuration Debug -derivedDataPath "$RUNNER_TEMP/OpenIPhoneUse-iOS" CODE_SIGNING_ALLOWED=NO build
+        run: xcodebuild -project ios/OpenIPhoneUse.xcodeproj -scheme OpenIPhoneUse -sdk iphonesimulator -configuration Debug -derivedDataPath "$RUNNER_TEMP/OpenIPhoneUse-iOS" CODE_SIGNING_ALLOWED=NO build
