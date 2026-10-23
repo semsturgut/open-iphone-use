@@ -56,13 +56,6 @@ The final Chicken Bacon Ranch Pasta reel was initially unliked; one tap turned i
 heart red, verified in the live Mac view. The owner recorded the Mac screen.
 No comment, follow, repost or direct message was sent.
 
-## Optional native screen source
-
-The ReplayKit app has been built and used for owner-approved local capture and a direct
-Mac connection in development. The current gesture evidence above uses Safari capture.
-The native source's revised Mac-only settings are checked by configuration tests and an
-unsigned simulator build; physical reinstallation/retesting is a separate step.
-
 ## Still to verify
 
 Clean setup on another Mac/iPhone, OS/app version variations, pointer settings,

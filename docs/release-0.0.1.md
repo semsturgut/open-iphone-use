@@ -17,6 +17,7 @@ Windows and Linux support are on the roadmap.
 - `Open-iPhone-Use-0.0.1-macos-arm64.dmg` — Apple Silicon development-signed build.
 - Matching `.sha256` checksum.
 - `open-iphone-use-instagram-demo.mov` — real Mac window / paired iPhone demo.
+- `open-iphone-use-instagram-demo.mp4` — browser-playable version of the same recording.
 
 Drag Open iPhone Use.app into Applications, then follow the README setup steps.
 Owner-approved Bluetooth, AssistiveTouch, certificate trust and sharing are required.

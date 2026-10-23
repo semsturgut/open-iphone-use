@@ -170,7 +170,7 @@ document.hidden = true;
 tick(1_000);
 await intervalCallback();
 assert.equal(frameRequests().length, beforeBackground + 1,
-  'hiding the page must not stop uploads: iOS keeps the ReplayKit pipeline running');
+  'hiding the page must not stop uploads while iOS screen sharing remains active');
 assert.equal(stopRequests('background').length, 0, 'hiding the page must never tell the receiver to stop');
 document.hidden = false;
 

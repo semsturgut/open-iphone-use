@@ -8,6 +8,7 @@ Your Mac becomes a Bluetooth keyboard and mouse. Your iPhone shares its screen o
 Wi-Fi. Connect the two to any image-capable MCP agent.
 
 [Download 0.0.1](https://github.com/semsturgut/open-iphone-use/releases) ·
+[Website](https://semsturgut.github.io/open-iphone-use/) ·
 [Setup](#get-started) · [How it works](#how-it-works) · [Roadmap](ROADMAP.md)
 
 **macOS · Apple Silicon · MCP · Apache-2.0 · Experimental 0.0.1**
@@ -32,7 +33,9 @@ supports Apple Silicon macOS only.
 
 ## See it work
 
-[Watch the real-device demo](https://github.com/semsturgut/open-iphone-use/releases/download/v0.0.1/open-iphone-use-instagram-demo.mov)
+<video src="website/assets/demo.mp4" controls playsinline preload="metadata" poster="docs/media/app-connected.png" width="720">
+  <a href="website/assets/demo.mp4">Watch or download the real-device demo</a>
+</video>
 
 The demo searches Instagram in English for food, opens a cooking video, watches it,
 advances to another video, and likes a food video. Actions go through the bundled MCP
@@ -94,8 +97,8 @@ Keep the Mac and iPhone on the same trusted private Wi-Fi. In the Mac app:
 
 The capture link is private. The Mac masks its token on screen; never publish the copied
 link. Keep Safari visible for first calibration. iOS can pause/end capture, and only the
-owner can approve sharing again. The [native iPhone capture app](ios/README.md) is an
-optional source build; it is not required for the default Safari demo.
+owner can approve sharing again. The iPhone needs no app installation: its built-in
+Safari opens the Mac's sharing page.
 
 ### 4. Connect your agent through MCP
 
@@ -197,6 +200,10 @@ Xcode 26.2 (including its SDK and Swift toolchain) and macOS are required to bui
 ## Roadmap
 
 - **Linux and Windows builds** — planned, not implemented.
+- **ESP32 support** — planned standalone Bluetooth HID control; target is an iPhone and
+  ESP32 with no Mac/computer needed during use.
+- **Raspberry Pi support** — planned compact host for screen capture, MCP and device
+  control without a Mac/PC in the setup.
 - **Multi-iPhone support** — planned; the current bridge controls one paired phone.
 - Clean-machine compatibility tests, reconnect handling and a signed/notarized release.
 

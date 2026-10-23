@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://semsturgut.github.io/open-iphone-use/sitemap.xml

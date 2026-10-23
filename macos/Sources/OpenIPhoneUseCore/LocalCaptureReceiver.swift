@@ -141,8 +141,8 @@ public final class LocalCaptureReceiver {
             let reason = payload?["reason"]
             let message: String
             switch reason {
-            case "background": message = "Safari is in the background. Use the native iPhone Open iPhone Use broadcast to capture other apps."
-            case "muted": message = "Safari stopped delivering video frames. Resume sharing or use the native iPhone broadcast."
+            case "background": message = "Safari is in the background. Return to Safari and resume screen sharing."
+            case "muted": message = "Safari stopped delivering video frames. Return to Safari and resume screen sharing."
             case "paused": message = "iOS paused the screen broadcast. Resume it on the iPhone."
             default: message = "Screen sharing stopped on the iPhone. Start a new broadcast to resume."
             }

@@ -7,7 +7,7 @@ sharing and Bluetooth HID. Implemented behavior and release readiness are separa
 
 - [x] Native Mac onboarding, automatic receiver/radio startup and live preview.
 - [x] Local HTTPS capture with a private Wi-Fi address, per-installation token and local CA.
-- [x] Safari sharing page and optional native ReplayKit capture source.
+- [x] Safari sharing page for iPhone screen capture; no iPhone app required.
 - [x] Bundled MCP server with natural-language agent workflow and optional device argument.
 - [x] Two-click calibration and per-device/profile/version/orientation reuse.
 - [x] Faster paced pointer path, bounded measured retry and stale-capture guards.
@@ -17,6 +17,10 @@ sharing and Bluetooth HID. Implemented behavior and release readiness are separa
 
 ## Next platforms and devices
 
+- [ ] **ESP32 support.** Planned standalone Bluetooth HID bridge; an iPhone and ESP32
+      should be enough to control the phone, with no Mac or computer needed at runtime.
+- [ ] **Raspberry Pi support.** Planned compact host for screen receiving, MCP and HID
+      control; explore a setup that can run beside the iPhone without a Mac or PC.
 - [ ] **Linux and Windows builds.** Native transport/input support must be implemented
       and tested per platform; the macOS bridge is not portable by changing a build flag.
 - [ ] **Multi-iPhone support.** Per-device pairing, capture credentials, calibration,

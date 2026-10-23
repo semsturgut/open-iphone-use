@@ -41,12 +41,6 @@ state/epoch and page version. Keep Safari visible for calibration; compatible ma
 is reused when switching apps. The page's keep-alive behavior has been tested on one
 phone, but iOS can still pause or end capture.
 
-The optional native iPhone app uses ReplayKit and the same receiver token. It can upload
-while its containing app is backgrounded. It is a capture source, not an input injector.
-The automatic calibration-board orchestration currently belongs to the Safari page;
-native capture alone does not implement that board protocol. Do not claim this alternate
-source has the full default onboarding flow or every background scenario verified.
-
 ## Local HTTP contract inside HTTPS
 
 The receiver listens on private Wi-Fi IPv4 port 27890 and checks the connecting subnet.

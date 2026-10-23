@@ -50,9 +50,8 @@ pressing. Changing pointer appearance/settings can require a new physical check.
 The token persists across app restarts. The link remains valid while the Wi-Fi address
 and token are unchanged. A stopped broadcast still requires the owner's system approval
 again. Capture can pause or stop when switching apps; the tested phone continued sharing
-through native Reels/Shorts. Do not assume the same result on every iOS version.
-For another source, see [native iPhone capture](../ios/README.md); its calibration-board
-orchestration does not replace the default Safari setup.
+through native Reels/Shorts. Do not assume the same result on every iOS version. The
+iPhone uses its built-in Safari screen-sharing page; no iPhone app is installed.
 
 ## Register the MCP helper
 
@@ -130,8 +129,8 @@ need device checks; no universal accuracy/compatibility guarantee is implied.
 The receiver uses HTTPS on private Wi-Fi IPv4 port 27890, checks the connecting subnet,
 requires the per-installation token and accepts bounded JPEGs. Only the newest frame
 stays in Mac memory. CA/TLS private keys stay under the private application-support
-directory; share only the public root certificate. Native iPhone capture validates TLS
-and blocks redirects. No cleartext mode is provided.
+directory; share only the public root certificate. Safari validates TLS and blocks
+redirects. No cleartext mode is provided.
 
 MCP uses stdio and a same-user Unix socket at
 `~/Library/Application Support/Open iPhone Use/bridge.sock` (directory 0700, socket 0600).

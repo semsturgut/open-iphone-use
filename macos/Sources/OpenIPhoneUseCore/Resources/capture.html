@@ -404,7 +404,7 @@
       frameCount = 0; tapCount = 0; calibrationRequested = false; startedAt = Date.now(); lastUploadAt = 0;
       const run = ++generation;
       // A mute event means the OS broadcast itself paused. Hiding the page must not be
-      // treated as a stop: iOS keeps the ReplayKit pipeline running in the background.
+      // treated as a stop: iOS can keep screen sharing active while Safari is hidden.
       track.addEventListener('mute', () => {
         if (run !== generation) return;
         inFlight?.abort();

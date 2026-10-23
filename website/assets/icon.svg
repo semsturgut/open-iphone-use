@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Open iPhone Use icon">
+  <rect width="64" height="64" rx="15" fill="#14221a"/>
+  <rect x="15" y="8" width="28" height="46" rx="6" fill="none" stroke="#f4f8f5" stroke-width="3.5"/>
+  <path d="M22 15h14M26 47h6" stroke="#f4f8f5" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M45 32c0-5 3-8 7-8 3 0 5 2 5 5 0 4-3 8-8 13l-3 3-3-4c-3-4-4-7-4-9 0-3 2-5 4-5 1 0 2 2 2 5Z" fill="#42d69b"/>
+  <circle cx="47" cy="29" r="1.2" fill="#14221a"/>
+</svg>

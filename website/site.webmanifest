@@ -1,0 +1,9 @@
+{
+  "name": "Open iPhone Use",
+  "short_name": "Open iPhone Use",
+  "start_url": "/open-iphone-use/",
+  "display": "standalone",
+  "background_color": "#f6f7f3",
+  "theme_color": "#101915",
+  "icons": [{"src":"assets/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}
