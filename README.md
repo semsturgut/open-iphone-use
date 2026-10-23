@@ -33,9 +33,7 @@ supports Apple Silicon macOS only.
 
 ## See it work
 
-[![Watch the real-device Instagram demo](docs/media/app-connected.png)](https://semsturgut.github.io/open-iphone-use/#demo)
-
-Select the preview to play the demo on the [project website](https://semsturgut.github.io/open-iphone-use/#demo).
+https://github.com/user-attachments/assets/9faccc34-7bd1-4714-a1a4-e8bb747bfb53
 
 The demo searches Instagram in English for food, opens a cooking video, watches it,
 advances to another video, and likes a food video. Actions go through the bundled MCP
