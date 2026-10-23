@@ -33,9 +33,9 @@ supports Apple Silicon macOS only.
 
 ## See it work
 
-<video src="website/assets/demo.mp4" controls playsinline preload="metadata" poster="docs/media/app-connected.png" width="720">
-  <a href="website/assets/demo.mp4">Watch or download the real-device demo</a>
-</video>
+[![Watch the real-device Instagram demo](docs/media/app-connected.png)](https://semsturgut.github.io/open-iphone-use/#demo)
+
+Select the preview to play the demo on the [project website](https://semsturgut.github.io/open-iphone-use/#demo).
 
 The demo searches Instagram in English for food, opens a cooking video, watches it,
 advances to another video, and likes a food video. Actions go through the bundled MCP
