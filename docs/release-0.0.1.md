@@ -4,6 +4,14 @@ First experimental Mac + iPhone release. The Mac advertises as a Bluetooth keybo
 mouse; iPhone frames arrive over private Wi-Fi HTTPS. Connect the bundled stdio MCP
 server to your image-capable agent.
 
+## Requirements
+
+Just an iPhone and an Apple Silicon Mac or MacBook — no additional hardware and no
+app installation on your iPhone. Download the macOS DMG, then follow the one-time
+Bluetooth, Safari screen-sharing and MCP setup in the README. Both devices need
+Bluetooth and the same trusted private Wi-Fi; your agent needs an image-capable MCP client.
+Windows and Linux support are on the roadmap.
+
 ## Assets
 
 - `Open-iPhone-Use-0.0.1-macos-arm64.dmg` — Apple Silicon development-signed build.

@@ -16,6 +16,20 @@ Wi-Fi. Connect the two to any image-capable MCP agent.
 
 </div>
 
+## Requirements
+
+- **Just an iPhone and an Apple Silicon Mac or MacBook.** No additional hardware needed.
+- **No app installation on your iPhone.** Open the sharing link in Safari.
+- Bluetooth enabled and both devices on the same trusted private Wi-Fi.
+- An image-capable MCP client to connect your AI agent.
+
+**Download the macOS DMG to get started** — the Mac app includes the local receiver
+and MCP server. No separate server installation is needed. Follow the
+[one-time setup](#get-started) to pair the phone, approve screen sharing and connect your agent.
+
+**Windows and Linux support are on the [roadmap](ROADMAP.md).** The current binary
+supports Apple Silicon macOS only.
+
 ## See it work
 
 [Watch the real-device demo](https://github.com/semsturgut/open-iphone-use/releases/download/v0.0.1/open-iphone-use-instagram-demo.mov)
