@@ -68,6 +68,12 @@ Download the **macOS arm64 DMG** from [Releases](https://github.com/semsturgut/o
 open it, and drag **Open iPhone Use.app** into **Applications**. Keep the app open.
 Its Bluetooth radio and private Wi-Fi receiver start automatically.
 
+With the DMG still open, run **Install Open iPhone Use.command** once. It installs the
+`open-iphone-use` CLI and shared agent skill, then registers the MCP server globally in any
+detected OpenCode and DeepSeek Harness desktop profile. Restart those clients if they were
+already open. For a manual install, run
+`/Applications/Open iPhone Use.app/Contents/Helpers/open-iphone-use install`.
+
 0.0.1 is a **development-signed, non-notarized alpha**, not a Developer ID
 notarized release. macOS may block it. Review the source and build it yourself if you
 cannot approve experimental software under your security policy. The supplied DMG
@@ -100,7 +106,8 @@ Safari opens the Mac's sharing page.
 
 ### 4. Connect your agent through MCP
 
-Register the bundled executable as a **stdio** MCP server:
+The DMG installer connects OpenCode and DeepSeek Harness automatically when installed.
+For another MCP client, register the bundled executable as a **stdio** server:
 
 ```text
 /Applications/Open iPhone Use.app/Contents/Helpers/open-iphone-use-mcp
@@ -120,11 +127,22 @@ Example JSON configuration (adapt the container key to your client):
 
 Reconnect the MCP server after installation/upgrades so the client refreshes its tools.
 The Mac app must be running. No repository working directory or model-provider key is
-required. Registration is per client, not per chat.
+required. Registration is per client, then available in that client's new chats. MCP
+instructions and the installed agent skill tell the agent to use these tools when you ask
+it to do something on the paired iPhone, even if you do not name the product. The
+client/model must expose MCP tools, load server instructions or agent skills, and support
+image-based tool use.
+
+The `open-iphone-use` CLI can also check or configure clients:
+
+```sh
+open-iphone-use status
+open-iphone-use setup --all
+```
 
 ### 5. Let it calibrate, then give it a task
 
-Ask, for example: **“Open iPhone Use, open Instagram and search for easy dinner recipes.”**
+Ask, for example: **“On my iPhone, open Instagram and search for easy dinner recipes.”**
 The MCP workflow starts with `ensure_session`. If needed, it opens a white calibration
 board, moves to two points and measures **two clicks**. There is no lengthy profile scan.
 Keep the sharing page visible until it finishes. Compatible calibration is then reused

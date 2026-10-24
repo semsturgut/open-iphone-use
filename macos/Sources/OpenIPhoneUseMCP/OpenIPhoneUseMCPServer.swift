@@ -62,7 +62,7 @@ private func boolean(_ description: String) -> Value {
 @main
 struct OpenIPhoneUseMCPServer {
     static func main() async throws {
-        let server = Server(name: "open-iphone-use-mac", version: "0.0.1", instructions: AgentWorkflow.instructions, capabilities: .init(tools: .init()))
+        let server = Server(name: "open-iphone-use", version: "0.0.1", instructions: AgentWorkflow.instructions, capabilities: .init(tools: .init()))
         await server.withMethodHandler(ListTools.self) { _ in .init(tools: tools) }
         await server.withMethodHandler(CallTool.self) { params in
             do {

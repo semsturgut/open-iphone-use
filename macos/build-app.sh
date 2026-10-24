@@ -33,10 +33,13 @@ if [[ -e "$APP_PATH" ]]; then
   rm -rf "$APP_PATH"
 fi
 mkdir -p "$APP_MACOS" "$APP_HELPERS" "$APP_RESOURCES"
+mkdir -p "$APP_RESOURCES/skills/open-iphone-use"
 cp "$BIN_DIR/OpenIPhoneUseMac" "$APP_MACOS/OpenIPhoneUseMac"
 cp "$BIN_DIR/open-iphone-use-mcp" "$APP_HELPERS/open-iphone-use-mcp"
+cp "$BIN_DIR/open-iphone-use" "$APP_HELPERS/open-iphone-use"
 cp Sources/OpenIPhoneUseMac/Info.plist "$APP_PATH/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP_RESOURCES/AppIcon.icns"
+cp Resources/open-iphone-use-skill/SKILL.md "$APP_RESOURCES/skills/open-iphone-use/SKILL.md"
 
 RESOURCE_BUNDLE="$(find "$BIN_DIR" -maxdepth 1 -type d -name 'OpenIPhoneUseMac_OpenIPhoneUseCore.bundle' -print -quit)"
 if [[ -z "$RESOURCE_BUNDLE" ]]; then
@@ -44,7 +47,7 @@ if [[ -z "$RESOURCE_BUNDLE" ]]; then
   exit 1
 fi
 cp -R "$RESOURCE_BUNDLE" "$APP_RESOURCES/"
-chmod 755 "$APP_MACOS/OpenIPhoneUseMac" "$APP_HELPERS/open-iphone-use-mcp"
+chmod 755 "$APP_MACOS/OpenIPhoneUseMac" "$APP_HELPERS/open-iphone-use-mcp" "$APP_HELPERS/open-iphone-use"
 xattr -cr "$APP_PATH"
 codesign --force --deep --sign "$SIGNING_IDENTITY" --identifier dev.openiphoneuse.mac "$APP_PATH"
 codesign --verify --deep --strict "$APP_PATH"

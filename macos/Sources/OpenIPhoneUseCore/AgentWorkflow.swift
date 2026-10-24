@@ -1,8 +1,10 @@
 public enum AgentWorkflow {
     public static let instructions = """
     Open iPhone Use controls the owner's paired iPhone from natural-language requests. When the
-    user asks Open iPhone Use to open or use an iPhone app, use these tools directly; do not ask
-    the user to paste a setup prompt or manually perform the requested navigation.
+    user asks in any language to do something on their iPhone (for example, open an app, search,
+    scroll, or use a screen; e.g. “iPhone'da şunu yap”) and this server is available, use these
+    tools even if the user does not say the product name. Do not ask for a setup prompt or have the
+    user perform the requested navigation manually.
     Start each new task with ensure_session (no arguments needed). It returns the current
     screen and reuses compatible calibration without navigating away. If calibration is
     needed, it prepares it using the Safari sharing page. Follow actionable setup errors;

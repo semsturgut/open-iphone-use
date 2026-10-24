@@ -53,10 +53,37 @@ again. Capture can pause or stop when switching apps; the tested phone continued
 through native Reels/Shorts. Do not assume the same result on every iOS version. The
 iPhone uses its built-in Safari screen-sharing page; no iPhone app is installed.
 
-## Register the MCP helper
+## Install the CLI and connect agents
 
-Register this installation's `Open iPhone Use.app/Contents/Helpers/open-iphone-use-mcp` executable
-as a stdio server in your MCP client. For a standard installation, a TOML client entry is:
+The release DMG includes **Install Open iPhone Use.command**. After dragging the app into
+Applications, run that command once. It installs the `open-iphone-use` CLI in
+`~/.local/bin`, adds the shared `open-iphone-use` agent skill, and registers the bundled
+stdio MCP server in detected OpenCode and DeepSeek Harness desktop configurations. Restart
+those clients if they were already open. The installer does not replace existing profile
+configuration; it appends the MCP entry and makes a one-time backup before changing a
+DeepSeek Harness profile.
+
+For a manual install, run:
+
+```sh
+/Applications/Open\ iPhone\ Use.app/Contents/Helpers/open-iphone-use install
+```
+
+The CLI also supports:
+
+```sh
+open-iphone-use status
+open-iphone-use setup --all
+open-iphone-use mcp
+```
+
+`setup` installs the shared skill and registers detected clients; flags can target one
+client with `--opencode` or `--deepseek-harness`. The shared skill is installed under
+`~/.agents/skills/open-iphone-use/SKILL.md`; OpenCode loads global skills there, while
+DeepSeek Harness receives the same workflow directly through MCP server instructions.
+Other clients that load shared agent skills can use that file too. To configure another MCP client manually, register this installation's
+`Open iPhone Use.app/Contents/Helpers/open-iphone-use-mcp` executable as a stdio server.
+For a standard installation, a TOML client entry is:
 
 ```toml
 [mcp_servers.open-iphone-use]
@@ -68,12 +95,12 @@ enabled = true
 
 No repository-specific working directory is required. Reconnect the client's MCP server
 when adding/upgrading the helper so its tool catalog and workflow refresh. Registration
-is per client, not per chat. Open iPhone Use does not register itself in every installed agent.
-The helper stores no AI key and does not run a model.
+is per client, not per chat. The helper stores no AI key and does not run a model.
 
-A new chat can receive a normal request such as “Open iPhone Use, open Instagram.” MCP
-initialization supplies the workflow. The client/model must support images and follow
-its instructions and confirmation rules. Owner-only setup prompts remain owner actions.
+A new chat can receive a normal request such as “On my iPhone, open Instagram.” MCP
+initialization and the shared skill supply the workflow. The client/model must expose MCP
+tools, load server instructions or skills, support images, and follow its confirmation
+rules. Owner-only setup prompts remain owner actions.
 
 ## Main tools
 

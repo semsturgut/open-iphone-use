@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .executable(name: "OpenIPhoneUseMac", targets: ["OpenIPhoneUseMac"]),
         .executable(name: "open-iphone-use-mcp", targets: ["OpenIPhoneUseMCP"]),
+        .executable(name: "open-iphone-use", targets: ["OpenIPhoneUseCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
@@ -31,6 +32,7 @@ let package = Package(
             name: "OpenIPhoneUseMCP",
             dependencies: ["OpenIPhoneUseCore", .product(name: "MCP", package: "swift-sdk")]
         ),
+        .executableTarget(name: "OpenIPhoneUseCLI"),
         .testTarget(name: "OpenIPhoneUseCoreTests", dependencies: ["OpenIPhoneUseCore"]),
     ]
 )
