@@ -11,7 +11,7 @@ private enum OpenIPhoneUseCLI {
         do {
             switch command {
             case "help", "--help", "-h": printHelp()
-            case "--version", "version": print("Open iPhone Use 0.0.1")
+            case "--version", "version": print("Open iPhone Use 0.0.2")
             case "mcp": try runMCPServer()
             case "install":
                 let cliPath = try installCLI()

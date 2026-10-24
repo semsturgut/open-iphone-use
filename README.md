@@ -7,11 +7,11 @@
 Your Mac becomes a Bluetooth keyboard and mouse. Your iPhone shares its screen over
 Wi-Fi. Connect the two to any image-capable MCP agent.
 
-[Download 0.0.1](https://github.com/semsturgut/open-iphone-use/releases) ·
+[Download 0.0.2](https://github.com/semsturgut/open-iphone-use/releases) ·
 [Website](https://semsturgut.github.io/open-iphone-use/) ·
 [Setup](#get-started) · [How it works](#how-it-works) · [Roadmap](ROADMAP.md)
 
-**macOS · Apple Silicon · MCP · Apache-2.0 · Experimental 0.0.1**
+**macOS · Apple Silicon · MCP · Apache-2.0 · Experimental 0.0.2**
 
 ![Open iPhone Use connected to an iPhone](docs/media/app-connected.png)
 
@@ -74,7 +74,7 @@ detected OpenCode and DeepSeek Harness desktop profile. Restart those clients if
 already open. For a manual install, run
 `/Applications/Open iPhone Use.app/Contents/Helpers/open-iphone-use install`.
 
-0.0.1 is a **development-signed, non-notarized alpha**, not a Developer ID
+0.0.2 is a **development-signed, non-notarized alpha**, not a Developer ID
 notarized release. macOS may block it. Review the source and build it yourself if you
 cannot approve experimental software under your security policy. The supplied DMG
 supports Apple Silicon; Intel, Linux and Windows binaries are not provided yet.

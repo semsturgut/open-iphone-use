@@ -64,12 +64,9 @@
     <h1>Open iPhone Use</h1>
     <p>Share this iPhone's screen with your Mac so the agent can see it and act on it.</p>
     <button id="start">Start sharing</button>
-    <label>
-      <input type="checkbox" id="withAudio" checked>
-      <span>Share audio too — keeps the screen sharing alive when you switch apps.</span>
-    </label>
     <p class="fine">The screen stays visible to your Mac while you share. Stop it from the iOS
-      broadcast indicator when you are done. Nothing is recorded.</p>
+      broadcast indicator when you are done. Nothing is recorded, and the microphone stays off,
+      so videos keep autoplaying in other apps.</p>
   </section>
 
   <section class="live" id="live">
@@ -123,7 +120,6 @@
   const calibrateButton = document.querySelector('#calibrate');
   const video = document.querySelector('#preview');
   const status = document.querySelector('#status');
-  const audioToggle = document.querySelector('#withAudio');
   const landing = document.querySelector('#landing');
   const live = document.querySelector('#live');
   const headline = document.querySelector('#headline');
@@ -146,8 +142,7 @@
 
   // --- audio -------------------------------------------------------------------
   // An audio-backed element is not paused once the page leaves the foreground. The graph
-  // renders silence, and the real captured audio is never attached: an unmuted element
-  // carrying live microphone audio would feed the speaker straight back into the mic.
+  // renders silence: the keepalive is inaudible and never captures the microphone.
   function startAudioSession() {
     try {
       const Context = window.AudioContext || window.webkitAudioContext;
@@ -378,26 +373,11 @@
     }
     startButton.disabled = true;
     try {
-      const wantAudio = audioToggle?.checked !== false;
-      let selected;
-      try {
-        selected = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: wantAudio });
-      } catch (error) {
-        if (!wantAudio) throw error;
-        selected = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      }
-      // iOS gives no audio track for display capture, so fall back to the microphone.
-      if (wantAudio && selected.getAudioTracks().length === 0) {
-        try {
-          const mic = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true },
-          });
-          selected = new MediaStream([...selected.getVideoTracks(), ...mic.getAudioTracks()]);
-        } catch {
-          status.dataset.error = 'Microphone unavailable; the screen share may pause in the background.';
-        }
-      }
-      stream = selected; track = stream.getVideoTracks()[0];
+      // Display capture must never ask for audio. On iOS the only audio this API could
+      // capture is the microphone, and a live microphone session makes other apps stop
+      // autoplaying their videos. The silent WebAudio session below keeps the page awake.
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      track = stream.getVideoTracks()[0];
       startAudioSession();
       await attachPreview();
       void keepScreenAwake();

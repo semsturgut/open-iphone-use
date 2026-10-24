@@ -21,7 +21,6 @@ const element = () => {
 
 const start = element();
 const stop = { ...element(), disabled: true };
-const audioToggle = { ...element(), checked: true };
 const calibrateButton = { ...element() };
 const boardBack = { ...element() };
 const landing = element();
@@ -60,7 +59,7 @@ const document = {
   ...listeners(), hidden: false,
   querySelector(selector) {
     return ({ '#start': start, '#stop': stop, '#preview': video, '#status': status,
-              '#withAudio': audioToggle, '#landing': landing, '#live': live,
+              '#landing': landing, '#live': live,
               '#headline': headline, '#hint': hint, '#dot': dot,
               '#board': board, '#hits': boardHits,
               '#calibrate': calibrateButton, '#boardBack': boardBack })[selector];
@@ -134,8 +133,9 @@ assert.equal(live.classList.contains('on'), false, 'the live section starts hidd
 
 await start.handlers.click();
 assert.equal(wake.requested, 1, 'sharing requests a screen wake lock when supported');
-assert.equal(audio.requestedAudio[0], true, 'audio must be requested by default to keep the session alive');
-assert.equal(audio.micRequested, 1, 'a missing display audio track must fall back to the microphone');
+assert.equal(audio.requestedAudio[0], false,
+  'display capture must never ask for audio: a live microphone session stops other apps from autoplaying videos');
+assert.ok(!audio.micRequested, 'no microphone may be requested, in any fallback');
 assert.equal(audio.contexts, 1, 'an audio session must start with sharing');
 assert.equal(audio.destinations, 1, 'the silent track must be routed to a stream destination');
 assert.equal(video.muted, false, 'the preview element must not be muted, or iOS pauses it in the background');
