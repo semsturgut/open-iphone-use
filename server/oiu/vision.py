@@ -1,5 +1,6 @@
 """Safety gates for our own green-bordered white calibration board only."""
 from io import BytesIO
+import math
 from PIL import Image, ImageChops, ImageFilter
 
 
@@ -10,13 +11,37 @@ def image(jpeg):
         return source.convert('RGB')
 
 
+def components(mask):
+    """Connected green objects, so status/battery icons cannot extend board bounds."""
+    w,h=mask.size
+    pixels=bytearray(mask.tobytes())
+    found=[]
+    for seed,value in enumerate(pixels):
+        if not value: continue
+        pixels[seed]=0
+        pending=[seed]
+        x0=x1=seed%w; y0=y1=seed//w
+        for index in pending:
+            x,y=index%w,index//w
+            x0=min(x0,x);x1=max(x1,x);y0=min(y0,y);y1=max(y1,y)
+            for ny in range(max(0,y-1),min(h,y+2)):
+                for nx in range(max(0,x-1),min(w,x+2)):
+                    n=ny*w+nx
+                    if pixels[n]: pixels[n]=0;pending.append(n)
+        found.append((len(pending),(x0,y0,x1+1,y1+1)))
+    return sorted(found,reverse=True)
+
+
 def board(jpeg):
     pic = image(jpeg)
     r, g, b = pic.split()
     mask = ImageChops.multiply(g.point(lambda v: 255 if v > 150 else 0),
                               ImageChops.multiply(r.point(lambda v: 255 if v < 80 else 0), b.point(lambda v: 255 if v < 180 else 0)))
-    rect = mask.getbbox()
-    if not rect: raise ValueError('Keep the green-bordered white Safari calibration board visible')
+    objects=components(mask)
+    rectangles=[box for _,box in objects if box[2]-box[0]>=pic.width*.6 and box[3]-box[1]>=pic.height*.35]
+    if len(rectangles)>1: raise ValueError('More than one possible calibration board; no click was sent')
+    rect=rectangles[0] if rectangles else None
+    if not rect: raise ValueError('Calibration board is closed or not visible: status dots and charging battery icons are not the board. Open the green-bordered white Safari board and keep sharing')
     x0, y0, x1, y1 = rect
     w, h = pic.size
     if x1-x0 < w*.6 or y1-y0 < h*.35: raise ValueError('Calibration board is closed or not visible: the green status dot is not the board. Open the Safari calibration board and keep sharing')
@@ -31,32 +56,53 @@ def board(jpeg):
     return pic, (x0/w, y0/h, (x1-x0)/w, (y1-y0)/h)
 
 
-def pointer(jpeg, board_required=True):
-    pic, rect = board(jpeg) if board_required else (image(jpeg),(0,0,1,1))
-    w, h = pic.size
-    x0, y0, rw, rh = rect
-    pixels = pic.load()
-    mask = Image.new('L', pic.size)
-    data = mask.load()
-    for y in range(int((y0+.015)*h), int((y0+rh-.015)*h)):
-        for x in range(int((x0+.015)*w), int((x0+rw-.015)*w)):
-            r,g,b = pixels[x,y]
-            if 80 <= r <= 190 and max(r,g,b)-min(r,g,b) < 12: data[x,y]=255
-    mask = mask.filter(ImageFilter.MinFilter(5))
-    data = mask.load()
-    candidates = []
-    for y in range(h):
-        for x in range(w):
-            if not data[x,y]: continue
-            queue = [(x,y)]; data[x,y]=0
-            for px,py in queue:
-                for nx,ny in ((px-1,py),(px+1,py),(px,py-1),(px,py+1)):
-                    if 0 <= nx < w and 0 <= ny < h and data[nx,ny]:
-                        data[nx,ny]=0; queue.append((nx,ny))
-            xs,ys=zip(*queue)
-            cw,ch=max(xs)-min(xs)+1,max(ys)-min(ys)+1
-            fill=len(queue)/(cw*ch)
-            if max(4,w//150) <= min(cw,ch) and max(cw,ch) <= w/10 and .75 <= cw/ch <= 1.33 and .6 <= fill <= .95:
-                candidates.append((sum(xs)/len(xs)/w,sum(ys)/len(ys)/h))
-    if len(candidates) != 1: raise ValueError('No single grey pointer is visible '+('inside the board' if board_required else 'on the shared screen')+'; no click was sent. Use the standard grey AssistiveTouch pointer')
-    return candidates[0], rect
+def safe_calibration_point(point, rect):
+    """Keep calibration clicks inside the board and away from its Back button."""
+    x,y=point; bx,by,bw,bh=rect
+    inside=bx+.04*bw<x<bx+.9*bw and by+.06*bh<y<by+.88*bh
+    back_zone=x>bx+.7*bw and y<by+.18*bh
+    return inside and not back_zone
+
+
+def pointer(jpeg, board_required=True, expected=None, radius=.18, reference=None):
+    on_board=True
+    if board_required: pic,rect=board(jpeg)
+    else:
+        try: pic,rect=board(jpeg)
+        except ValueError: pic,rect=image(jpeg),(0,0,1,1); on_board=False
+    w,h=pic.size
+    x0,y0,rw,rh=rect
+    left,top=max(0,int((x0+.015)*w)),max(0,int((y0+.015)*h))
+    right,bottom=min(w,int((x0+rw-.015)*w)),min(h,int((y0+rh-.015)*h))
+    if expected is not None:
+        left=max(left,int((expected[0]-radius)*w));right=min(right,int((expected[0]+radius)*w)+1)
+        top=max(top,int((expected[1]-radius)*h));bottom=min(bottom,int((expected[1]+radius)*h)+1)
+    if right<=left or bottom<=top: raise ValueError('Pointer target is outside the observable screen area; no click was sent')
+    pixels=pic.crop((left,top,right,bottom))
+    difference=None
+    if reference is not None:
+        prior=image(reference)
+        if prior.size != pic.size: raise ValueError('Screen geometry changed while locating the pointer; no click was sent')
+        delta=ImageChops.difference(pic,prior).convert('L')
+        difference=delta.point(lambda value: 255 if value>=12 else 0)
+    # A translucent grey circle inherits color from the app below it. Narrow luminance
+    # bands isolate it even on grey/colored screens without accepting a whole grey panel.
+    bands=[(80,190,12)] if on_board or expected is None else [(80,190,12),(60,110,48),(100,145,48),(135,180,48),(170,215,48)]
+    candidates=[]
+    for low,high,chroma in bands:
+        mask=Image.new('L',pixels.size)
+        mask.putdata([255 if low<=r<=high and max(r,g,b)-min(r,g,b)<chroma else 0 for r,g,b in (pixels.get_flattened_data() if hasattr(pixels,'get_flattened_data') else pixels.getdata())])
+        mask=mask.filter(ImageFilter.MinFilter(5))
+        for count,(bx,by,ex,ey) in components(mask):
+            cw,ch=ex-bx,ey-by
+            fill=count/(cw*ch)
+            if max(4,w//150)<=min(cw,ch) and max(cw,ch)<=w/10 and .8<=cw/ch<=1.25 and .6<=fill<=.95:
+                point=((left+(bx+ex-1)/2)/w,(top+(by+ey-1)/2)/h)
+                if expected is not None and math.dist(point,expected)>radius: continue
+                if difference is not None:
+                    changed=difference.crop((left+bx,top+by,left+ex,top+ey))
+                    if changed.histogram()[255] < changed.width*changed.height*.2: continue
+                if not any(math.dist(point,old)<.006 for old in candidates): candidates.append(point)
+    if len(candidates)!=1:
+        raise ValueError('No single grey pointer is visible '+('inside the board' if on_board else 'on the shared screen')+'; no click was sent. Use the standard grey AssistiveTouch pointer, keep it visible and leave pointer size/Zoom unchanged')
+    return candidates[0],rect

@@ -28,6 +28,20 @@ The MCP server supplies the detailed tool workflow and current device limits. Us
 
 
 Calibration waits for one pointer at a plausible position to stabilize across two fresh
-frames (about three seconds maximum), and waits for matching Safari tap feedback. Do not
+frames, and waits for matching Safari tap feedback. Do not
 retry a failed preparation with blind clicks. The UI opens directly on the loopback URL
 without an operator token; the LAN capture link remains private and device-specific.
+
+
+When screenshot `ageMilliseconds` is already two seconds or older, wait for a new frame
+before input; fetching the latest image does not make an old capture fresh. A rejection
+before input should be followed by another screenshot, never a repeated click on an old ID.
+Portable and native `scroll(dy)` now share the HID sign: positive advances content upward
+on iOS. Older installed portable builds inverted this sign. Wheel sensitivity varies by app;
+small wheel values may do nothing, and the wrong direction can pull Reels into refresh/black
+partial views. Verify the creator/caption after settling; video motion is not an item change.
+If coordinate preparation fails, do not keep retrying blind clicks. Use visible, owner-approved
+recovery and report the exact blocker. Charging-battery/status icons are not a calibration board.
+Keep AssistiveTouch tracking speed, pointer appearance/size, orientation and Zoom unchanged
+between calibration and use. Recalibrate after changing them. Visual corrections are bounded;
+a failed final pointer gate sends no tap. Hardware success still requires observing the UI.

@@ -75,8 +75,8 @@ not an automatic login/reboot service. Logs are private (0600) in the state dire
    Each added phone is immediately visible in the side-by-side grid, with a waiting
    placeholder until frames arrive. Share/AirDrop (when supported), Copy and QR persist.
 5. Tap a live tile. Its first tap prepares the pointer with Safari visible. Calibration
-   tolerates lagging frames: it waits up to about three seconds for one pointer to be
-   stable in two fresh frames at a plausible position before clicking. Inspect each result.
+   tolerates lagging frames: it waits for a stable board and pointer in fresh frames,
+   then validates the fitted mapping before coordinate taps. Inspect each result.
 
 For **two iPhones**, repeat the sequence for each. Bindings, frames, calibration, input
 queues, report state and cancellation are per phone. One phone's calibration waits or
@@ -152,3 +152,11 @@ from physical proof. The owner's live diagnosis established delayed pointer rend
 the latency fixes still need a repeat physical run. See [validation](docs/web-server-validation.md),
 [server details](docs/headless-server.md), [installation](docs/installation.md) and
 [contributing](CONTRIBUTING.md). Distribution and release builds use the CLI/setup workflow.
+
+
+Coordinate taps require a visible, stable AssistiveTouch pointer and up to three visual
+corrections; if it cannot reach the target within 1% of the screen, the action fails without a
+click. Keep pointer appearance, tracking speed, Zoom and orientation fixed after preparation.
+Calibration uses a green board and seven measurements; a stale or interrupted board closes
+and reports a retry instruction. Positive `scroll(dy)` advances content on iOS; inspect each
+result because individual apps may interpret wheel input differently.

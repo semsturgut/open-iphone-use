@@ -31,6 +31,12 @@ def tools():
             props.update({key: {"type": kind} for key, kind in PARAMETERS.get(name, {}).items()})
         result.append(dict(name=name, description=f"{name.replace('_', ' ')}. Choose a device explicitly; inspect each resulting screen. HID acceptance does not prove UI success.",
                            inputSchema=dict(type="object", properties=props, required=[p for p in props if not (p=="expected_frame_id" and name in PREPARATION)], additionalProperties=False)))
+        if name == 'scroll':
+            result[-1]['description'] = 'Send raw HID wheel ticks. Positive dy moves content up/advances on iOS, matching native macOS. App sensitivity varies; use modest values and verify reel identity, not video animation or ok:true.'
+        if name == 'advance_feed':
+            result[-1]['description'] = 'Advance to the NEXT item with dy=1 (upward drag); dy=-1 returns to the previous item. Pointer targeting must settle before pressing. Inspect creator/title afterward; HID acceptance is not a transition count.'
+        if name == 'get_latest_screenshot':
+            result[-1]['description'] = 'Read the selected phone screenshot and frame age. For input use an image younger than two seconds; an already older latest frame cannot authorize input. Wait/re-read if sharing lags.'
         if name == 'create_device':
             result[-1]['description'] = 'Create a phone bound to the explicitly selected Bluetooth HID peer from list_bluetooth_candidates. Returns its private capture_path; combine with setup capture_origin. Bluetooth must be connected before adding.'
         if name == 'list_bluetooth_candidates':

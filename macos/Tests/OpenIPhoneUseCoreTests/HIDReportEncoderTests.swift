@@ -31,6 +31,16 @@ final class HIDReportEncoderTests: XCTestCase {
         XCTAssertEqual(Array(try HIDReportEncoder.mouse(wheel: -1)), [0, 0, 0, 255])
     }
 
+    func testPositiveFeedAndScrollShareTheNativeHIDWheelSign() throws {
+        let next = try XCTUnwrap(FeedDirection.wheelDelta(items: 1, amount: 120))
+        let previous = try XCTUnwrap(FeedDirection.wheelDelta(items: -1, amount: 120))
+        XCTAssertEqual(next, 120)
+        XCTAssertEqual(previous, -120)
+        XCTAssertEqual(Array(try HIDReportEncoder.mouse(wheel: next)), [0, 0, 0, 120])
+        XCTAssertEqual(Array(try HIDReportEncoder.mouse(wheel: previous)), [0, 0, 0, 136])
+        XCTAssertNil(FeedDirection.wheelDelta(items: 2, amount: 120))
+    }
+
     func testGATTMouseClicksDoNotMoveEitherAxisOrLeaveButtonsPressed() throws {
         XCTAssertEqual(Array(try HIDReportEncoder.mouse(buttons: HIDReportEncoder.buttonMask("left"))), [1, 0, 0, 0])
         XCTAssertEqual(Array(try HIDReportEncoder.mouse(buttons: HIDReportEncoder.buttonMask("right"))), [2, 0, 0, 0])

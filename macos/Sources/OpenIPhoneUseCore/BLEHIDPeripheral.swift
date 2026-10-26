@@ -210,7 +210,7 @@ public final class BLEHIDPeripheral: NSObject {
         motionTask = nil
     }
 
-    /// Scrolls the focused scroll view. Negative moves the content up.
+    /// Scrolls the focused scroll view. Positive advances content upward on iOS.
     ///
     /// AssistiveTouch turns wheel reports into the same scroll gestures a trackpad produces, so
     /// this is how a long feed or a settings list is paged without hunting for a drag handle.

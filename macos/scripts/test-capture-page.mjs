@@ -29,6 +29,7 @@ const headline = element();
 const hint = element();
 const dot = element();
 const board = element();
+board.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 800 });
 const boardHits = element();
 const status = element();
 
@@ -38,7 +39,8 @@ const silentTrack = { kind: 'audio', readyState: 'live', stop() {} };
 const audioTrack = { kind: 'audio', readyState: 'live', stop() {} };
 const videoTrack = { kind: 'video', readyState: 'live', muted: false, handlers: {}, addEventListener(n, cb) { this.handlers[n] = cb; }, stop() {} };
 
-let videoFrameCallback, intervalCallback, heldResponse, holdNextFrame = false;
+let videoFrameCallback, intervalCallback, heldResponse, holdNextFrame = false, failCalibration = false;
+let nextTimer = 0; const timers = new Map();
 let nowMs = 1_700_000_000_000;
 const tick = ms => { nowMs += ms; };
 class FakeDate extends Date {
@@ -111,10 +113,11 @@ vm.runInNewContext(script, {
     getTracks() { return this.tracks; }
   },
   setInterval(cb) { intervalCallback = cb; return 1; }, clearInterval() { intervalCallback = null; },
-  setTimeout() { return 2; }, clearTimeout() {},
+  setTimeout(cb, delay) { const id = ++nextTimer; timers.set(id, { cb, delay }); return id; },
+  clearTimeout(id) { timers.delete(id); },
   async fetch(path, options) {
     requests.push({ path, options });
-    if (path === '/api/calibrate') return { ok: true, async json() { return { ok: true, message: 'Ready' }; } };
+    if (path === '/api/calibrate') return { ok: true, async json() { return failCalibration ? { ok: false, message: 'Calibration failed: keep Safari visible' } : { ok: true, message: 'Ready' }; } };
     if (path === '/api/frame' && holdNextFrame) {
       holdNextFrame = false;
       return new Promise(resolve => { heldResponse = resolve; });
@@ -244,13 +247,25 @@ heldResponse({ ok: true, async json() { return { frameID: 'open', fps: 1, boardE
 await openTick;
 assert.equal(board.classList.contains('on'), true, 'a further epoch must reopen the board');
 
-// The board catches taps and reports them as screen fractions.
+// Board-local fractions are mapped into screen fractions by the receiver.
 board.handlers.pointerdown({ clientX: 100, clientY: 400 });
 await flush();
 const tap = requests.filter(r => r.path === '/api/tap').at(-1);
 assert.ok(tap, 'a tap on the board must be reported to the Mac');
-assert.deepEqual(JSON.parse(tap.options.body), { x: 0.25, y: 0.5 }, 'the tap must be a screen fraction');
+assert.deepEqual(JSON.parse(tap.options.body), { x: 0.25, y: 0.5 }, 'the tap must be a board-local fraction');
 assert.equal(JSON.parse(status.textContent).board, true, 'the status must say the board is up');
+board.getBoundingClientRect = () => ({ left: 20, top: 80, width: 320, height: 640 });
+board.handlers.pointerdown({ clientX: 100, clientY: 400 });
+await flush();
+assert.deepEqual(JSON.parse(requests.filter(r => r.path === '/api/tap').at(-1).options.body),
+  { x: 0.25, y: 0.5 }, 'Safari viewport offsets/zoom must not change board-local tap fractions');
+const leases = [...timers.values()].filter(timer => timer.delay === 10000);
+assert.equal(leases.length, 1, 'an open board has one renewable lease');
+leases[0].cb();
+assert.equal(board.classList.contains('on'), false, 'a stalled server must close the board locally');
+assert.match(hint.textContent, /Calibration interrupted/);
+
+
 
 video.paused = true;
 const playsBefore = video.plays;
@@ -267,6 +282,14 @@ assert.equal(JSON.parse(requests.filter(r => r.path === '/api/calibrate').at(-1)
 board.classList.add('on');
 boardBack.handlers.click();
 assert.equal(board.classList.contains('on'), false, 'the Back button must close the board again');
+board.classList.add('on');
+failCalibration = true;
+calibrateButton.handlers.click();
+await flush();
+assert.equal(board.classList.contains('on'), false, 'failed calibration closes the board immediately');
+assert.match(hint.textContent, /Calibration failed/);
+failCalibration = false;
+
 
 stop.handlers.click();
 assert.equal(intervalCallback, null);

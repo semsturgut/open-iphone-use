@@ -41,8 +41,10 @@ Repeat this sequence for two iPhones. Devices never change peers because another
 connected or a share stopped. There is no screen-based guessing or global preparation
 lock. Each phone has its own calibration board, reports, input lock, frame stream and
 cancellation generation. The first web tap calls `ensure_session` for that phone only;
-CLI/MCP can request preparation explicitly. The measured two-click pointer calibration
-still requires Safari's green board, a visible pointer and authenticated tap feedback.
+CLI/MCP can request preparation explicitly. Calibration uses two seed measurements plus
+four board quadrants and the center, fits a fixed 16-unit motion profile, and validates a
+held-out target. It requires Safari's green board, a visible pointer and authenticated tap
+feedback. Older profiles are invalidated and need preparation with Safari in front.
 A disconnected peer is reported separately from a paused screen; actions require both
 live HID and fresh capture. Re-pairing with a different OS identifier requires remove/new.
 
@@ -190,8 +192,7 @@ are separate future work. [Installation](installation.md), [validation](web-serv
 
 ## Delayed-frame safety and live status
 
-Calibration and coordinate taps wait up to roughly three seconds for exactly one grey
-pointer to be stable in two different fresh frames, at a plausible commanded position.
+Calibration and coordinate taps wait for exactly one grey pointer to be stable in two different fresh frames, at a plausible commanded position.
 Home sends 20 reports on each axis before moving into the board. Board opening also
 requires two stable observations, and delayed tap feedback is matched to the actual press
 and pointer position. A green status dot alone is not a calibration board. No global
@@ -250,3 +251,25 @@ exceptions return protocol errors rather than terminating the process. It exits 
 the client closes stdin/stdout (EOF/broken pipe). Diagnostics rotate in `<state>/mcp.log`
 (1 MiB, two backups), not stdout. The state defaults to `~/.open-iphone-use`; `--state` or
 `OIU_STATE` selects another. Restart clients after updating their registered CLI path.
+
+
+### Pointer accuracy and scroll direction
+
+The capture page reports board-local tap fractions; the receiver maps them to the measured
+board rectangle in the full screenshot. The board detector isolates connected green borders
+from charging icons and status dots. If calibration fails, the server closes the board and
+invalidates the old fit; the page also closes it if server responses stop for ten seconds.
+Keep the standard grey AssistiveTouch pointer, tracking speed, Zoom and orientation stable.
+
+Before a coordinate tap, the portable controller homes the pointer, observes the screen
+before and after movement, and permits up to three observed corrections. A visible stable
+pointer must end within 1% of the requested whole-screen fraction before pressing. Ambiguous
+or unobservable pointers fail with no click. The native controller also requires bounded
+visual convergence; ordinary app content or animation may make detection unavailable. These
+checks do not prove which UI element received a click: inspect the resulting screen.
+
+Positive `scroll(dy)` now sends a positive HID wheel value in both portable and native paths;
+`advance_feed(dy=1)` uses an upward drag to request the next item. The older portable build
+inverted raw wheel direction. Wheel sensitivity and full-screen feed behavior vary by app;
+verify the displayed creator/title after each gesture rather than inferring item changes from
+HID acceptance or animated pixels.

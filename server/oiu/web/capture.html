@@ -135,7 +135,7 @@
   let audioContext = null, silentOscillator = null, silentGain = null, silentDestination = null;
   let inFlight = null, pendingStop = Promise.resolve();
   let lastUploadAt = 0, tapCount = 0, calibrationRequested = false;
-  let wakeLock = null, calibrationMessage = '';
+  let wakeLock = null, calibrationMessage = '', boardLease = null;
   // The Mac publishes the upload rate and asks for the board with every accepted frame.
   let framesPerSecond = 1;
   // Only a distinct Mac request changes the board; manual toggles survive repeated frames.
@@ -224,8 +224,11 @@
       calibrationMessage = result.ok
         ? 'Ready. Pointer calibration checked. You can switch apps; the agent checks each action.'
         : (result.message || 'Calibration unavailable. Try again with this page in front.');
+      if (!result.ok) setBoard(false);
       hint.textContent = calibrationMessage;
-    } catch (error) { if (run === generation) hint.textContent = String(error); }
+    } catch (error) {
+      if (run === generation) { setBoard(false); hint.textContent = String(error); }
+    }
     finally { if (run === generation) calibrateButton.disabled = false; }
   }
 
@@ -238,8 +241,12 @@
   });
 
   function reportTap(event) {
-    const x = event.clientX / window.innerWidth;
-    const y = event.clientY / window.innerHeight;
+    // The server maps this visible board rectangle into the captured physical screen.
+    // Layout viewport fractions drift when Safari chrome, page zoom or offsets change.
+    const rect = board.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return;
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
     tapCount += 1;
     boardHits.textContent = `${tapCount} taps · last ${x.toFixed(3)}, ${y.toFixed(3)}`;
     fetch('/api/tap', {
@@ -249,7 +256,18 @@
     }).catch(() => {});
   }
 
+  function renewBoardLease() {
+    clearTimeout(boardLease);
+    boardLease = setTimeout(() => {
+      setBoard(false);
+      calibrationMessage = 'Calibration interrupted: no recent server response. Keep Safari sharing visible and prepare again.';
+      hint.textContent = calibrationMessage;
+    }, 10000);
+  }
+
   function setBoard(on) {
+    if (on) renewBoardLease();
+    else { clearTimeout(boardLease); boardLease = null; }
     if (on === board.classList.contains('on')) return;
     board.classList.toggle('on', on);
     if (on) {
@@ -366,6 +384,7 @@
         lastMacEpoch = result.boardEpoch;
         setBoard(result.boardOpen === true);
       }
+      if (board.classList.contains('on') && result.boardOpen === true) renewBoardLease();
     } catch (error) {
       if (run === generation) status.dataset.error = String(error);
     } finally {

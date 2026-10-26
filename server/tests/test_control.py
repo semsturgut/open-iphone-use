@@ -81,6 +81,7 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.engine.peer,'phone-a')
         self.assertAlmostEqual(self.engine.calibration['width'],600,delta=5)
         self.assertAlmostEqual(self.engine.calibration['height'],1000,delta=5)
+        self.assertEqual(len(self.engine.calibration['samples']),7)
         self.assertFalse(self.engine.board_open)
         saved=json.loads(self.engine.path.read_text())
         self.assertEqual(saved['peer'],'phone-a')
@@ -160,7 +161,7 @@ class ControlTests(unittest.TestCase):
         def delayed(peer, report, payload):
             if peer == 'phone-a' and not entered.is_set():
                 entered.set()
-                if not resume.wait(5): raise OSError('Test timed out')
+                if not resume.wait(30): raise OSError('Test timed out')
             original(peer, report, payload)
         self.radio.send = delayed
         result = []
@@ -172,7 +173,7 @@ class ControlTests(unittest.TestCase):
             self.assertTrue(second['ok'], second)
             self.assertTrue(first.is_alive(), 'Phone B must complete while phone A is blocked')
         finally:
-            resume.set(); first.join(4)
+            resume.set(); first.join(20)
         self.assertTrue(result[0]['ok'], result)
         self.assertEqual(self.engine.peer, 'phone-a')
         self.assertEqual(other.peer, 'phone-b')

@@ -338,7 +338,9 @@ public final class OpenIPhoneUseController: ObservableObject {
                 guard (-127...127).contains(dx), (-127...127).contains(dy) else { return fail(request, "Pointer deltas must be between -127 and 127.") }
                 pointerUnits = nil
                 try await hid.moveSmooth(dx: dx, dy: dy, steps: request.steps, intervalMilliseconds: request.intervalMilliseconds)
-            case "click": try await hid.click(button: request.button ?? "left")
+            case "click":
+                guard try await locatePointer() != nil else { throw PointerControlError.notFound }
+                try await hid.click(button: request.button ?? "left")
             case "advance_feed":
                 try await advanceFeed(items: request.dy ?? 1, wheelPerItem: request.steps ?? 120,
                                       mode: request.profile ?? "swipe")
@@ -365,6 +367,7 @@ public final class OpenIPhoneUseController: ObservableObject {
                 let ux = previous.unitsX + Int((correction.x * Double(span.width)).rounded())
                 let uy = previous.unitsY + Int((correction.y * Double(span.height)).rounded())
                 try await movePointerToUnits(x: ux, y: uy)
+                try await correctPointerAim(previous.x, previous.y)
                 try await hid.click(button: "left")
                 return await verified(request, "One bounded correction sent using the supplied observed landing. Inspect UI outcome; calibration unchanged.", commandID: commandID)
             case "toggle_playback":

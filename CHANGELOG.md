@@ -2,6 +2,13 @@
 
 ## Unreleased — CLI-first multi-phone workflow
 
+- Align portable and native HID scroll signs; `advance_feed(dy=1)` targets the next item.
+- Detect the calibration board separately from charging/status icons, retry stable frames,
+  close interrupted boards, and fit seven fixed-cadence samples per phone.
+- Verify visually settled pointer positions and correct bounded misses before coordinate
+  clicks; reject ambiguous or non-converging targets without clicking.
+
+
 - Install one canonical agent skill with Claude/Command Code aliases; register OpenCode
   (preserving JSONC comments) and Command Code alongside Codex/Claude/Cursor, migrate old
   application commands and clean stale skill copies/backups.
