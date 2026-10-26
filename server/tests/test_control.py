@@ -55,11 +55,17 @@ class ControlTests(unittest.TestCase):
         self.pairing=Pairing(self.radio)
         self.engine=Control(self.pairing,Path(self.tmp.name)/'a',peer='phone-a')
         self.radio.engines['phone-a']=self.engine
+        self.frame_delay=0
         self.running=True
         def frames():
+            from collections import defaultdict,deque
+            positions=defaultdict(lambda:deque(maxlen=80))
             while self.running:
                 for peer,engine in list(self.radio.engines.items()):
-                    x,y=self.radio.positions[peer]
+                    now=time.monotonic()
+                    positions[peer].append((now,*self.radio.positions[peer]))
+                    eligible=[entry for entry in positions[peer] if entry[0]<=now-self.frame_delay]
+                    _,x,y=eligible[-1] if eligible else positions[peer][0]
                     try: engine.ingest(screen(x,y,engine.board_open))
                     except ValueError:
                         if not engine.closed: raise
@@ -81,6 +87,56 @@ class ControlTests(unittest.TestCase):
         result=self.engine.request('pointer_tap',x=.5,y=.5)
         self.assertTrue(result['ok'],result)
         self.assertAlmostEqual(self.radio.positions['phone-a'][0],300,delta=5)
+    def test_calibration_tolerates_eight_hundred_ms_pointer_frame_lag(self):
+        self.frame_delay=.8
+        result=self.engine.request('ensure_session')
+        self.assertTrue(result['ok'],result)
+        self.assertAlmostEqual(self.engine.calibration['width'],600,delta=5)
+        self.assertAlmostEqual(self.engine.calibration['height'],1000,delta=5)
+        self.assertEqual(self.engine.peer,'phone-a')
+
+    def test_pointer_gate_waits_for_two_stable_distinct_frames_before_clicking(self):
+        self.running=False; self.thread.join(2)
+        self.engine.ingest(screen(0,0))
+        started=time.monotonic()
+        def delayed_frames():
+            for point in [(0,0)]*7+[(180,300),(190,310),(190,310),(190,310)]:
+                time.sleep(.1); self.engine.ingest(screen(*point))
+        writer=threading.Thread(target=delayed_frames); writer.start()
+        try:
+            point,_,_=self.engine.click(gated=True,after=started)
+        finally: writer.join(3)
+        self.assertGreater(time.monotonic()-started,.8)
+        self.assertAlmostEqual(point[0],190/600,delta=.005)
+        self.assertEqual(sum(r==2 and p[0]==1 for _,r,p in self.radio.calls),1)
+
+    def test_one_pointer_frame_is_not_enough_and_timeout_sends_no_click(self):
+        self.running=False; self.thread.join(2)
+        started=time.monotonic()
+        self.engine.ingest(screen())
+        with self.assertRaises(ValueError): self.engine.wait_pointer(started,timeout=.15)
+        self.assertFalse(any(any(payload) for _,_,payload in self.radio.calls))
+
+    def test_tap_feedback_ignores_late_mismatch_until_matching_feedback_arrives(self):
+        pressed=time.monotonic()
+        self.engine.request('capture_tap',x=.9,y=.9)
+        timer=threading.Timer(.3,lambda:self.engine.request('capture_tap',x=.25,y=.5)); timer.start()
+        try: actual=self.engine.wait_tap(pressed,(.25,.5),(0,0,1,1))
+        finally: timer.join(2)
+        self.assertEqual(actual,(.25,.5))
+
+    def test_home_and_board_route_only_to_the_bound_subscribed_peer(self):
+        result=self.engine.request('pointer_home')
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(sum(any(p[1:]) for _,r,p in self.radio.calls if r==2),40)
+        self.assertTrue(all(peer=='phone-a' for peer,_,_ in self.radio.calls))
+        result=self.engine.request('set_page_board',aim=True)
+        self.assertTrue(result['ok'],result)
+        vision.board(self.engine.jpeg)
+        self.radio.positions.clear()
+        self.assertFalse(self.engine.request('pointer_home')['ok'])
+        self.assertFalse(self.engine.request('set_page_board',aim=True)['ok'])
+
     def test_two_phone_association_and_targeted_keyboard(self):
         self.radio.positions['phone-b']=[0,0]
         other=Control(self.pairing,Path(self.tmp.name)/'b',peer='phone-b')

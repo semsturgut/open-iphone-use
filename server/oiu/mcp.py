@@ -2,7 +2,7 @@
 import json
 import sys
 from .cli import call
-from .core import ACTIONS
+from .core import ACTIONS, PREPARATION
 
 PARAMETERS = {
     "move_pointer": {"dx": "integer", "dy": "integer"},
@@ -23,7 +23,7 @@ def tools():
             props["expected_frame_id"] = {"type": "string"}
             props.update({key: {"type": kind} for key, kind in PARAMETERS.get(name, {}).items()})
         result.append(dict(name=name, description=f"{name.replace('_', ' ')}. Choose a device explicitly; inspect each resulting screen. HID acceptance does not prove UI success.",
-                           inputSchema=dict(type="object", properties=props, required=list(props), additionalProperties=False)))
+                           inputSchema=dict(type="object", properties=props, required=[p for p in props if not (p=="expected_frame_id" and name in PREPARATION)], additionalProperties=False)))
         if name == 'create_device':
             result[-1]['description'] = 'Create a phone bound to the explicitly selected Bluetooth HID peer from list_bluetooth_candidates. Returns its private capture_path; combine with setup capture_origin. Bluetooth must be connected before adding.'
         if name == 'list_bluetooth_candidates':
@@ -40,7 +40,7 @@ def handle(args, method, params):
         version = requested if requested in ("2024-11-05", "2025-03-26", "2025-06-18") else "2024-11-05"
         return dict(protocolVersion=version, capabilities={"tools": {}},
                     serverInfo={"name": "open-iphone-use-portable", "version": "0.1.0"},
-                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Read a fresh screenshot, then act with expected_frame_id. Inspect a new screen after each action. Owner pairing/sharing/unlocking is required.")
+                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input read a fresh screenshot and use an ID from that phone’s last two seconds. Red Bluetooth/screen sharing status means control will not work. Inspect a new screen after each action. Owner pairing/sharing/unlocking is required.")
     if method == "ping":
         return {}
     if method == "tools/list":

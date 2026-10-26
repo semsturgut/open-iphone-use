@@ -19,7 +19,7 @@ def board(jpeg):
     if not rect: raise ValueError('Keep the green-bordered white Safari calibration board visible')
     x0, y0, x1, y1 = rect
     w, h = pic.size
-    if x1-x0 < w*.6 or y1-y0 < h*.35: raise ValueError('Calibration board is partly obscured')
+    if x1-x0 < w*.6 or y1-y0 < h*.35: raise ValueError('Calibration board is closed or not visible: the green status dot is not the board. Open the Safari calibration board and keep sharing')
     # Require green on all four edges, not merely a green object elsewhere on screen.
     for box in ((x0,y0,x1,min(y1,y0+5)), (x0,max(y0,y1-5),x1,y1),
                 (x0,y0,min(x1,x0+5),y1), (max(x0,x1-5),y0,x1,y1)):
@@ -31,8 +31,8 @@ def board(jpeg):
     return pic, (x0/w, y0/h, (x1-x0)/w, (y1-y0)/h)
 
 
-def pointer(jpeg):
-    pic, rect = board(jpeg)
+def pointer(jpeg, board_required=True):
+    pic, rect = board(jpeg) if board_required else (image(jpeg),(0,0,1,1))
     w, h = pic.size
     x0, y0, rw, rh = rect
     pixels = pic.load()
@@ -58,5 +58,5 @@ def pointer(jpeg):
             fill=len(queue)/(cw*ch)
             if max(4,w//150) <= min(cw,ch) and max(cw,ch) <= w/10 and .75 <= cw/ch <= 1.33 and .6 <= fill <= .95:
                 candidates.append((sum(xs)/len(xs)/w,sum(ys)/len(ys)/h))
-    if len(candidates) != 1: raise ValueError('No single grey pointer is visible inside the board; no click was sent. Use the standard grey AssistiveTouch pointer')
+    if len(candidates) != 1: raise ValueError('No single grey pointer is visible '+('inside the board' if board_required else 'on the shared screen')+'; no click was sent. Use the standard grey AssistiveTouch pointer')
     return candidates[0], rect

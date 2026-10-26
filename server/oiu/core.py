@@ -11,7 +11,10 @@ import uuid
 
 from .backends import CaptureOnlyBackend
 from .permissions import secure_directory
+from .names import specific, distinguish
 
+PREPARATION = {"ensure_session", "prepare_session", "pointer_quick_probe"}
+FRAME_WINDOW = 2.0
 MAX_FRAME = 4 * 1024 * 1024
 ACTIONS = {"move_pointer", "click", "scroll", "type_text", "send_key", "pointer_tap",
            "pointer_move", "pointer_home", "ensure_session", "prepare_session", "swipe",
@@ -28,7 +31,7 @@ class Device:
     frame_id: str | None = None
     at: float = 0
     active: bool = False
-    history: deque = field(default_factory=lambda: deque(maxlen=512))
+    history: deque = field(default_factory=lambda: deque(maxlen=128))
     lock: object = field(default_factory=threading.RLock)
     action_lock: object = field(default_factory=threading.Lock)
     slots: object = field(default_factory=lambda: threading.BoundedSemaphore(16))
@@ -50,6 +53,8 @@ class Device:
                         age_ms=age, capture_active=self.active and age is not None and age <= 5000,
                         hid=type(self.backend).__name__, bt_id=self.bt_id,
                         bluetooth_connected=self.bluetooth_connected, bluetooth_error=self.bluetooth_error,
+                        bluetooth_status='Bluetooth connected' if self.bluetooth_connected else "Bluetooth not connected — control won't work",
+                        screen_share_status='Screen sharing live' if self.active and age is not None and age<=5000 else "Screen sharing off — control won't work",
                         name_source=self.name_source, sharing_active=self.active and age is not None and age <= 5000,
                         control_status=getattr(self.backend, "label", "Control configured"))
 
@@ -63,6 +68,7 @@ class Device:
             self.frame_id = controls.get("frameID", str(uuid.uuid4()))
             self.jpeg, self.at, self.active = jpeg, time.monotonic(), True
             self.history.append((self.frame_id, self.at))
+            while self.history and self.at-self.history[0][1]>FRAME_WINDOW: self.history.popleft()
             return {"fps": 15, "frameID": self.frame_id, **controls}
 
     def stop(self):
@@ -91,7 +97,7 @@ class Device:
                     expected = arguments.get("expectedFrameID")
                     if not self.summary()["capture_active"]:
                         raise ValueError("Capture inactive or older than five seconds")
-                    if not any(fid == expected and time.monotonic() - at <= 5 for fid, at in self.history):
+                    if operation not in PREPARATION and not any(fid == expected and time.monotonic() - at <= FRAME_WINDOW for fid, at in self.history):
                         raise ValueError("Read a fresh screenshot and pass expected_frame_id for this device")
                 result = self.backend.request(operation, **arguments)
                 if not result.get("ok"):
@@ -156,8 +162,8 @@ class Registry:
         result = []
         for peer in self.radio.peers():
             if set(peer.get('reports', [])) != {1, 2}: continue
-            name = ''.join(c for c in (peer.get('name') or '') if c.isprintable()).strip()[:80]
-            result.append(dict(peer, name=name or f"iPhone ({peer['id'][-4:]})",
+            name = specific(peer.get('name'))
+            result.append(dict(peer, name=name or "iPhone",
                                name_source=peer.get('name_source', 'fallback') if name else 'fallback'))
         return result
 
@@ -166,8 +172,8 @@ class Registry:
         with self.lock:
             added = {d.bt_id: d.id for d in self.devices.values() if d.bt_id}
             retiring = set(self.retiring)
-        return [dict(p, bluetooth_connected=True, available=p['id'] not in added,
-                     device_id=added.get(p['id'])) for p in peers if p['id'] not in retiring]
+        return distinguish([dict(p, bluetooth_connected=True, available=p['id'] not in added,
+                     device_id=added.get(p['id'])) for p in peers if p['id'] not in retiring],identity='id')
 
     def create_bluetooth(self, bt_id):
         if not isinstance(bt_id, str) or not bt_id or len(bt_id) > 512:
@@ -245,7 +251,22 @@ class Registry:
                 if include_links: item['capture_path'] = f'/capture?token={d.token}'
                 result.append(item)
             if changed: self.save()
-            return result
+            return distinguish(result)
+
+    def global_status(self):
+        devices=self.list()
+        try: peers=self.bluetooth_peers(); error=''
+        except (OSError,ValueError) as failure: peers=[]; error=str(failure)
+        startup=getattr(self.radio,'startup',{}) if self.radio else {}
+        state=startup.get('state','advertising' if self.radio else 'capture-only')
+        on=bool(self.radio) and not error and not startup.get('error')
+        bt=all(d['bluetooth_connected'] for d in devices) if devices else bool(peers)
+        sharing=bool(devices) and all(d['sharing_active'] for d in devices)
+        return dict(bluetooth_on=on, bluetooth_state=state, bluetooth_connected=bt,
+                    sharing_active=sharing, bluetooth_connected_count=len(peers),
+                    sharing_count=sum(d['sharing_active'] for d in devices), devices_count=len(devices),
+                    bluetooth_status='Bluetooth connected' if bt else "Bluetooth not connected — control won't work",
+                    screen_share_status='Screen sharing live' if sharing else "Screen sharing off — control won't work")
 
     def close(self):
         for device in list(self.devices.values()):

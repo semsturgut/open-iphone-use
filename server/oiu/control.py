@@ -103,32 +103,69 @@ class Control:
             if not self.peer: raise ValueError('No paired iPhone associated with this screen')
             self.radio.send(self.peer, report, payload)
 
-    def wait_frame(self, after, timeout=5):
+    def capture_after(self, after, timeout=3):
         deadline=time.monotonic()+timeout
         with self.condition:
-            while self.at <= after:
+            while True:
                 self.fresh()
+                if self.at > after: return self.at, self.jpeg
                 remaining=deadline-time.monotonic()
-                if remaining <= 0: raise ValueError('No fresh screen arrived after input')
-                self.condition.wait(min(.2,remaining))
-        return self.jpeg
+                if remaining <= 0: raise ValueError('No fresh screen arrived while waiting for the shared screen to catch up')
+                self.condition.wait(min(.1,remaining))
 
-    def wait_board(self):
-        started=time.monotonic()
-        deadline=started+12
+    def wait_frame(self, after, timeout=5):
+        return self.capture_after(after,timeout)[1]
+
+    def wait_board(self, timeout=3):
+        deadline=time.monotonic()+timeout
+        after=time.monotonic()
+        previous=None
         while time.monotonic()<deadline:
-            if self.generation != self.sending_generation: raise ValueError('Preparation canceled')
-            if self.at>started:
-                try: return vision.board(self.jpeg)[1]
-                except ValueError: pass
-            time.sleep(.1)
-        raise ValueError('Keep Safari sharing visible and dismiss overlays so the green-bordered calibration board can be measured')
+            stamp,jpeg=self.capture_after(after,max(.001,deadline-time.monotonic()))
+            after=stamp
+            try: rect=vision.board(jpeg)[1]
+            except ValueError:
+                previous=None; continue
+            if previous and max(abs(a-b) for a,b in zip(previous,rect)) <= .01: return rect
+            previous=rect
+        raise ValueError('Calibration board did not become visible and stable within 3 seconds. Keep Safari sharing visible; a green status dot alone is not the calibration board')
+
+    def wait_pointer(self, after, expected=None, plausible=None, board_required=True, timeout=3):
+        deadline=time.monotonic()+timeout
+        previous=None
+        reason='Pointer has not appeared'
+        while time.monotonic()<deadline:
+            stamp,jpeg=self.capture_after(after,max(.001,deadline-time.monotonic()))
+            after=stamp
+            try: point,rect=vision.pointer(jpeg,board_required=board_required)
+            except ValueError as error:
+                previous=None; reason=str(error); continue
+            if expected is not None and math.dist(point,expected) > .07:
+                previous=None; reason='Pointer has not reached the commanded position'; continue
+            if plausible is not None and not plausible(point,rect,jpeg):
+                previous=None; reason='Pointer position is not plausible for the commanded calibration move'; continue
+            if previous is not None and math.dist(previous,point) <= .01:
+                return point,rect,stamp
+            previous=point
+        raise ValueError('Timed out waiting for one stable grey AssistiveTouch pointer in two fresh frames; no click was sent. '+reason)
+
+    def wait_tap(self, pressed, point, rect, timeout=3):
+        deadline=time.monotonic()+timeout
+        with self.condition:
+            while time.monotonic()<deadline:
+                self.fresh()
+                for stamp,x,y in self.taps:
+                    actual=(rect[0]+x*rect[2],rect[1]+y*rect[3])
+                    if stamp>=pressed and math.dist(actual,point)<=.06: return actual
+                self.condition.wait(min(.1,max(.001,deadline-time.monotonic())))
+        raise ValueError('Safari did not return matching calibration tap feedback within 3 seconds; no coordinate mapping was saved')
 
     def home(self):
         self.packet(2,mouse())
-        for _ in range(8): self.packet(2,mouse(dx=-127)); time.sleep(.008)
-        for _ in range(8): self.packet(2,mouse(dy=-127)); time.sleep(.008)
+        for _ in range(20): self.packet(2,mouse(dx=-127)); time.sleep(.008)
+        for _ in range(20): self.packet(2,mouse(dy=-127)); time.sleep(.008)
         self.units=(0,0)
+        self.motion_at=time.monotonic()
 
     def move(self, dx,dy, buttons=0):
         if type(dx) is not int or type(dy) is not int or max(abs(dx),abs(dy))>20000:
@@ -141,46 +178,47 @@ class Control:
             oldx,oldy=x,y
             time.sleep(.008)
         self.units=(self.units[0]+dx,self.units[1]+dy)
+        self.motion_at=time.monotonic()
 
-    def click(self, button='left', gated=False):
+    def click(self, button='left', gated=False, after=None, expected=None, plausible=None, board_required=True):
         if button not in ('left','right','middle'): raise ValueError('Unknown pointer button')
+        observation=None
         if gated:
-            # A live board and a single unambiguous pointer are mandatory before calibration presses.
-            self.fresh(); vision.pointer(self.jpeg)
+            observation=self.wait_pointer(after if after is not None else time.monotonic(),
+                                          expected,plausible,board_required)
         mask={'left':1,'right':2,'middle':4}[button]
+        pressed=time.monotonic()
         self.packet(2,mouse(buttons=mask))
         time.sleep(.035)
         self.packet(2,mouse())
+        return (*observation[:2],pressed) if observation else None
 
     def calibrate(self):
         self.open_board(True)
         try:
-            rect=self.wait_board()
+            self.wait_board()
             initial=vision.image(self.jpeg)
             initial_aspect=initial.width/initial.height
             self.home()
             samples=[]
             for ux,uy in ((64,128),(192,384)):
                 self.move(ux-self.units[0],uy-self.units[1])
-                moved=time.monotonic()
-                self.wait_frame(moved)
-                point,rect=vision.pointer(self.jpeg)
-                current=vision.image(self.jpeg)
-                if abs(current.width/current.height-initial_aspect)>.03: raise ValueError('Orientation changed during calibration; keep the phone still and prepare again')
-                pressed=time.monotonic()
-                self.click(gated=True)
-                deadline=time.monotonic()+4
-                tap=None
-                with self.condition:
-                    while tap is None and time.monotonic()<deadline:
-                        self.fresh()
-                        tap=next((t for t in self.taps if t[0]>=pressed),None)
-                        if tap is None: self.condition.wait(.1)
-                if tap is None: raise ValueError('Safari did not report the calibration click; no coordinate mapping was saved')
-                x,y=rect[0]+tap[1]*rect[2],rect[1]+tap[2]*rect[3]
-                if math.dist((x,y),point)>.06: raise ValueError('Calibration feedback does not match the visible pointer')
+                def plausible(point,rect,jpeg):
+                    current=vision.image(jpeg)
+                    if abs(current.width/current.height-initial_aspect)>.03:
+                        raise ValueError('Orientation changed during calibration; keep the phone still and prepare again')
+                    if not samples:
+                        # Broad initial estimate allows iOS acceleration/DPI differences,
+                        # while rejecting an old pointer on the far side of the board.
+                        nominal=(min(.8,ux/initial.width),min(.8,uy/initial.height))
+                        return math.dist(point,nominal)<.4
+                    old=samples[-1]
+                    dx,dy=point[0]-old[2],point[1]-old[3]
+                    return dx>.06 and dy>.06 and 100<=(ux-old[0])/dx<=20000 and 200<=(uy-old[1])/dy<=20000
+                point,rect,pressed=self.click(gated=True,after=self.motion_at,plausible=plausible)
+                x,y=self.wait_tap(pressed,point,rect)
                 samples.append((ux,uy,x,y))
-            width,height=((samples[1][axis]-samples[0][axis])/(samples[1][axis+2]-samples[0][axis+2]) if samples[1][axis+2]-samples[0][axis+2]>.06 else 0 for axis in (0,1))
+            width,height=((samples[1][axis]-samples[0][axis])/(samples[1][axis+2]-samples[0][axis+2]) for axis in (0,1))
             if not 100<=width<=20000 or not 200<=height<=20000: raise ValueError('Calibration was clamped or inconsistent; keep the pointer board visible')
             pic=vision.image(self.jpeg)
             self.calibration=dict(width=width,height=height,offset_x=samples[0][2]-64/width,
@@ -205,6 +243,7 @@ class Control:
         c=self.calibration
         ux,uy=round((x-c['offset_x'])*c['width']),round((y-c['offset_y'])*c['height'])
         self.home(); self.move(ux,uy)
+        self.wait_pointer(self.motion_at,expected=(x,y),board_required=False)
 
     def stop_capture(self):
         self.generation+=1
@@ -259,23 +298,29 @@ class Control:
             except (OSError, ValueError) as failure: peers, error = [], str(failure)
             connected = any(p['id'] == self.peer and set(p['reports']) == {1, 2} for p in peers)
             return dict(ok=True,status=dict(connected=connected, bluetooth_connected=connected, bluetooth_error=error,
-                        peer=self.peer, calibrationReady=bool(self.calibration),captureActive=self.is_fresh()),message=self.label)
+                        peer=self.peer, calibrationReady=bool(self.calibration),captureActive=self.is_fresh(),
+                        sharing_active=self.is_fresh(),
+                        bluetooth_status='Bluetooth connected' if connected else "Bluetooth not connected — control won't work",
+                        screen_share_status='Screen sharing live' if self.is_fresh() else "Screen sharing off — control won't work"),message=self.label)
         self.sending_generation=self.generation
         try:
             self.fresh()
             self.pairing.associate(self)
             if operation in ('prepare_session','pointer_quick_probe'): self.calibration=None
             if operation in ('ensure_session','prepare_session','pointer_quick_probe'): self.ready()
-            elif operation=='set_page_board': self.open_board(bool(args.get('aim')))
+            elif operation=='set_page_board':
+                self.open_board(bool(args.get('aim')))
+                if args.get('aim'): self.wait_board()
             elif operation=='pointer_home': self.home()
             elif operation=='move_pointer':
                 dx,dy=args.get('dx',0),args.get('dy',0)
                 if type(dx) is not int or type(dy) is not int or max(abs(dx),abs(dy))>127: raise ValueError('Relative deltas must be -127…127')
                 self.move(dx,dy)
+                self.wait_pointer(self.motion_at,board_required=False)
             elif operation=='click': self.click(args.get('button','left'))
             elif operation in ('pointer_move','pointer_tap'):
                 self.absolute(args['x'],args['y'])
-                if operation=='pointer_tap': self.click()
+                if operation=='pointer_tap': self.click(gated=True,after=self.motion_at,expected=(args['x'],args['y']),board_required=False)
             elif operation=='type_text':
                 text=args['text']
                 if not isinstance(text,str) or len(text.encode())>500: raise ValueError('Text must contain at most 500 ASCII bytes')
