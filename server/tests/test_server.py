@@ -13,9 +13,9 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from oiu.core import Registry
+from oiu.core import Registry, FRAME_HISTORY_LIMIT, FRAME_MAX_AGE
 from oiu.http import Server
-from oiu.mcp import tools
+from oiu.mcp import tools, handle
 
 JPEG = b'\xff\xd8\xfftest'
 
@@ -110,17 +110,74 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(len(json.loads(output.stdout)),2)
         self.assertFalse(Path(client_state).exists())
 
-    def test_expected_frame_window_accepts_recent_history_and_preparation_needs_no_id(self):
+    def test_expected_frame_delay_and_preparation(self):
         self.a.upload(JPEG); first=self.a.frame_id
-        self.a.upload(JPEG+b'next')
+        self.a.history[-1] = (first, time.monotonic()-30)
+        self.a.upload(JPEG+b'next')  # Capture is still active after a slow model's delay.
         self.assertTrue(self.a.action('click',{'expectedFrameID':first})['ok'])
-        self.a.history.clear(); self.a.history.append((first,time.monotonic()-2.1))
-        with self.assertRaises(ValueError): self.a.action('click',{'expectedFrameID':first})
+        with self.assertRaisesRegex(ValueError, 'before your last action.*get_latest_screenshot'):
+            self.a.action('click',{'expectedFrameID':first})
+        self.a.history.append(('expired', time.monotonic()-FRAME_MAX_AGE-1))
+        with self.assertRaisesRegex(ValueError, 'older than 120 seconds.*get_latest_screenshot'):
+            self.a.action('click',{'expectedFrameID':'expired'})
+        with self.assertRaisesRegex(ValueError, 'Unknown frame id.*get_latest_screenshot'):
+            self.a.action('click',{'expectedFrameID':'unknown'})
         self.assertTrue(self.a.action('ensure_session',{})['ok'])
         self.assertTrue(self.a.action('prepare_session',{})['ok'])
+        with self.assertRaisesRegex(ValueError, 'before your last action'):
+            self.a.action('click', {'expectedFrameID': self.a.frame_id})
         for tool in tools():
             if tool['name'] in ('ensure_session','prepare_session'):
                 self.assertNotIn('expected_frame_id',tool['inputSchema']['required'])
+
+    def test_mcp_freshness_guidance(self):
+        instructions = handle(None, 'initialize', {})['instructions']
+        self.assertIn('120 seconds', instructions)
+        self.assertIn('after its last input completed', instructions)
+        screenshot = next(t for t in tools() if t['name'] == 'get_latest_screenshot')
+        self.assertIn('five seconds', screenshot['description'])
+        action = next(t for t in tools() if t['name'] == 'send_key')
+        self.assertIn('after its last input completed', action['inputSchema']['properties']['expected_frame_id']['description'])
+
+    def test_frame_after_completion_and_device_independence(self):
+        self.a.upload(JPEG); self.b.upload(JPEG)
+        frame_a, frame_b = self.a.frame_id, self.b.frame_id
+        self.assertTrue(self.a.action('click', {'expectedFrameID': frame_a})['ok'])
+        # A's input must not invalidate B's screenshot.
+        self.assertTrue(self.b.action('click', {'expectedFrameID': frame_b})['ok'])
+        with self.assertRaisesRegex(ValueError, 'before your last action'):
+            self.a.action('send_key', {'expectedFrameID': frame_a, 'key': 'enter'})
+        self.a.upload(JPEG)
+        self.assertTrue(self.a.action('send_key', {'expectedFrameID': self.a.frame_id, 'key': 'enter'})['ok'])
+        with self.assertRaisesRegex(ValueError, 'Unknown frame id'):
+            self.b.action('click', {'expectedFrameID': self.a.frame_id})
+
+    def test_frame_during_action_and_failed_action_are_not_post_action(self):
+        self.a.upload(JPEG)
+        self.a.backend.block = True
+        with ThreadPoolExecutor(1) as pool:
+            action = pool.submit(self.a.action, 'click', {'expectedFrameID': self.a.frame_id})
+            self.assertTrue(self.a.backend.enter.wait(1))
+            self.a.upload(JPEG); during = self.a.frame_id
+            self.a.backend.release.set()
+            action.result(2)
+        with self.assertRaisesRegex(ValueError, 'before your last action'):
+            self.a.action('click', {'expectedFrameID': during})
+        self.a.upload(JPEG); before_failure = self.a.frame_id
+        with patch.object(self.a.backend, 'request', side_effect=OSError('partial input')):
+            with self.assertRaises(OSError):
+                self.a.action('click', {'expectedFrameID': before_failure})
+        with self.assertRaisesRegex(ValueError, 'before your last action'):
+            self.a.action('click', {'expectedFrameID': before_failure})
+
+    def test_frame_history_is_bounded(self):
+        self.a.upload(JPEG); oldest = self.a.frame_id
+        for _ in range(1800):  # Two minutes at the nominal capture rate.
+            self.a.upload(JPEG)
+        self.assertIn(oldest, [frame_id for frame_id, _ in self.a.history])
+        for _ in range(FRAME_HISTORY_LIMIT + 3):
+            self.a.upload(JPEG)
+        self.assertEqual(len(self.a.history), FRAME_HISTORY_LIMIT)
 
     def test_duplicate_bluetooth_names_remain_distinguishable(self):
         self.registry.radio.items[0]['name']='iPhone'

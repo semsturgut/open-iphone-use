@@ -27,7 +27,7 @@ def tools():
         props = {} if name in ("list_devices", "list_bluetooth_candidates") else {"device_id": {"type": "string"}}
         if name == 'create_device': props = {'bt_id': {'type': 'string'}}
         if name in ACTIONS:
-            props["expected_frame_id"] = {"type": "string"}
+            props["expected_frame_id"] = {"type": "string", "description": "ID of a screenshot from this device captured after its last input completed and no more than 120 seconds ago. Call get_latest_screenshot after each input."}
             props.update({key: {"type": kind} for key, kind in PARAMETERS.get(name, {}).items()})
         result.append(dict(name=name, description=f"{name.replace('_', ' ')}. Choose a device explicitly; inspect each resulting screen. HID acceptance does not prove UI success.",
                            inputSchema=dict(type="object", properties=props, required=[p for p in props if not (p=="expected_frame_id" and name in PREPARATION)], additionalProperties=False)))
@@ -36,7 +36,7 @@ def tools():
         if name == 'advance_feed':
             result[-1]['description'] = 'Advance to the NEXT item with dy=1 (upward drag); dy=-1 returns to the previous item. Pointer targeting must settle before pressing. Inspect creator/title afterward; HID acceptance is not a transition count.'
         if name == 'get_latest_screenshot':
-            result[-1]['description'] = 'Read the selected phone screenshot and frame age. For input use an image younger than two seconds; an already older latest frame cannot authorize input. Wait/re-read if sharing lags.'
+            result[-1]['description'] = 'Read the selected phone screenshot and frame age. For input use an ID captured after this device’s last input completed, at most 120 seconds old. Screen sharing must still be active (latest frame within five seconds).'
         if name == 'create_device':
             result[-1]['description'] = 'Create a phone bound to the explicitly selected Bluetooth HID peer from list_bluetooth_candidates. Returns its private capture_path; combine with setup capture_origin. Bluetooth must be connected before adding.'
         if name == 'list_bluetooth_candidates':
@@ -53,7 +53,7 @@ def handle(args, method, params):
         version = requested if requested in ("2024-11-05", "2025-03-26", "2025-06-18") else "2024-11-05"
         return dict(protocolVersion=version, capabilities={"tools": {}},
                     serverInfo={"name": "open-iphone-use-portable", "version": "0.1.0"},
-                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input read a fresh screenshot and use an ID from that phone’s last two seconds. Red Bluetooth/screen sharing status means control will not work. Inspect a new screen after each action. Owner pairing/sharing/unlocking is required.")
+                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old; call get_latest_screenshot after every action, including preparation. Screen sharing must remain active with a frame in the last five seconds. Red Bluetooth/screen sharing status means control will not work. Owner pairing/sharing/unlocking is required.")
     if method == "ping":
         return {}
     if method == "tools/list":

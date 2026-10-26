@@ -124,9 +124,11 @@ without restarting the MCP client. Diagnostics go to `~/.open-iphone-use/mcp.log
 Use `list_bluetooth_candidates`/`create_device` for requested setup;
 then `list_devices`, select an explicit `device_id`, inspect its screenshot and act.
 `ensure_session` and `prepare_session` obtain their own fresh frames and **do not require
-expected_frame_id**. Other input accepts an ID from that phone's last approximately two
-seconds of frames, not only the latest frame. Old, foreign or stopped-stream IDs fail.
-Inspect the returned image after each action. HID acceptance alone is not UI success.
+expected_frame_id**. Other input accepts that phone's screenshot ID for up to 120 seconds,
+provided the frame was captured after its last input completed. Call `get_latest_screenshot`
+after every action, including preparation, before choosing the next input. Screen sharing
+must still be active with a frame in the last five seconds. Unknown, old, pre-action or
+stopped-stream IDs fail. HID acceptance alone is not UI success.
 
 After a later server restart, the helper publishes the same HID service and advertises
 again for bonded phones; macOS also restores CoreBluetooth services/subscriptions when

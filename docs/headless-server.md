@@ -175,11 +175,18 @@ document the underlying interfaces, not verified iPhone compatibility.
 ## MCP and limits
 
 Register the installed CLI with `args: ["mcp"]`. List devices, choose an explicit ID,
-read its screenshot, then act using an ID from that device’s last two seconds of
-frames. Preparation and Stop require only the device ID; preparation captures its own
-observations. The portable MCP surface covers keyboard, pointer, calibration, scroll, swipe/feed
+read its screenshot, then act using an ID for a frame captured after that device's last
+input completed and no more than 120 seconds ago. Fetch a new screenshot after each action,
+including preparation; a frame observed during an action does not establish its final result.
+Screen sharing must also remain active, with a latest frame within five seconds. Preparation
+and Stop require only the device ID; preparation captures its own observations. The portable MCP surface covers keyboard, pointer, calibration, scroll, swipe/feed
 and release, plus list_bluetooth_candidates/create_device/remove_device. Advanced legacy diagnostic/retry aliases remain available only from the
 standalone Swift helper. No model or API key is embedded in this project.
+
+Frame times are measured when the server receives each upload; the capture protocol does
+not carry a synchronized phone-side capture time. Network or encoding lag can therefore
+make the pixels older than the recorded time. Inspect the image and wait for visible
+transitions to settle before choosing an action.
 
 Each device stores its own capture credential, frame history, peer mapping/calibration,
 action serialization and cancellation generation. State is owner-private (POSIX modes /

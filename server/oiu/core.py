@@ -14,7 +14,10 @@ from .permissions import secure_directory
 from .names import specific, distinguish
 
 PREPARATION = {"ensure_session", "prepare_session", "pointer_quick_probe"}
-FRAME_WINDOW = 2.0
+FRAME_MAX_AGE = 120.0
+# At 15 fps this retains over four minutes of IDs, including expired IDs so
+# their age can be reported. The hard cap also bounds high-rate senders.
+FRAME_HISTORY_LIMIT = 4096
 MAX_FRAME = 4 * 1024 * 1024
 ACTIONS = {"move_pointer", "click", "scroll", "type_text", "send_key", "pointer_tap",
            "pointer_move", "pointer_home", "ensure_session", "prepare_session", "swipe",
@@ -31,7 +34,8 @@ class Device:
     frame_id: str | None = None
     at: float = 0
     active: bool = False
-    history: deque = field(default_factory=lambda: deque(maxlen=128))
+    history: deque = field(default_factory=lambda: deque(maxlen=FRAME_HISTORY_LIMIT))
+    last_input_completed_at: float = 0
     lock: object = field(default_factory=threading.RLock)
     action_lock: object = field(default_factory=threading.Lock)
     slots: object = field(default_factory=lambda: threading.BoundedSemaphore(16))
@@ -68,7 +72,6 @@ class Device:
             self.frame_id = controls.get("frameID", str(uuid.uuid4()))
             self.jpeg, self.at, self.active = jpeg, time.monotonic(), True
             self.history.append((self.frame_id, self.at))
-            while self.history and self.at-self.history[0][1]>FRAME_WINDOW: self.history.popleft()
             return {"fps": 15, "frameID": self.frame_id, **controls}
 
     def stop(self):
@@ -97,12 +100,26 @@ class Device:
                     expected = arguments.get("expectedFrameID")
                     if not self.summary()["capture_active"]:
                         raise ValueError("Capture inactive or older than five seconds")
-                    if operation not in PREPARATION and not any(fid == expected and time.monotonic() - at <= FRAME_WINDOW for fid, at in self.history):
-                        raise ValueError("Read a fresh screenshot and pass expected_frame_id for this device")
-                result = self.backend.request(operation, **arguments)
-                if not result.get("ok"):
-                    self.backend.request("stop_control")
-                return result
+                    if operation not in PREPARATION:
+                        frame_at = next((at for fid, at in reversed(self.history) if fid == expected), None)
+                        retry = "Call get_latest_screenshot and retry with its frame_id."
+                        if frame_at is None:
+                            raise ValueError(f"Unknown frame id for this device. {retry}")
+                        if time.monotonic() - frame_at > FRAME_MAX_AGE:
+                            raise ValueError(f"Frame is older than {int(FRAME_MAX_AGE)} seconds. {retry}")
+                        if frame_at <= self.last_input_completed_at:
+                            raise ValueError(f"Frame was captured before your last action completed. {retry}")
+                # Record even failed or interrupted backend calls: they may have
+                # delivered partial input. Frames arriving during the call do not
+                # prove that the caller observed its final effect.
+                try:
+                    result = self.backend.request(operation, **arguments)
+                    if not result.get("ok"):
+                        self.backend.request("stop_control")
+                    return result
+                finally:
+                    with self.lock:
+                        self.last_input_completed_at = time.monotonic()
         except (OSError, ValueError):
             self.backend.request("stop_control")
             raise

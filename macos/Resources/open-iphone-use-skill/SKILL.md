@@ -13,9 +13,9 @@ metadata:
 
 When the user asks you to act on their paired iPhone, use the Open iPhone Use MCP tools if they are available. Do not ask them to paste a setup prompt or perform the requested navigation manually.
 
-1. On the portable/headless server, call `list_devices`. Check both `bluetooth_connected` and `sharing_active`, choose the intended `device_id` by name and exact binding, and read `get_latest_screenshot`. Bluetooth HID must be connected, not merely remembered as paired. If setup is requested, use `list_bluetooth_candidates`, then `create_device` with the explicitly chosen candidate's `id` as `bt_id`. Its private `capture_url` must be opened on that same phone; the owner approves sharing. Do not create an unbound record, guess among fallback names, or move a binding to another phone. Pass that device explicitly to every device-scoped tool. Ordinary input accepts an `expected_frame_id` from that phone’s last two seconds of frames; use recent history, not an exact-latest race. Never default to another phone if the requested one is unavailable. The legacy standalone app may expose optional device arguments instead.
+1. On the portable/headless server, call `list_devices`. Check both `bluetooth_connected` and `sharing_active`, choose the intended `device_id` by name and exact binding, and read `get_latest_screenshot`. Bluetooth HID must be connected, not merely remembered as paired. If setup is requested, use `list_bluetooth_candidates`, then `create_device` with the explicitly chosen candidate's `id` as `bt_id`. Its private `capture_url` must be opened on that same phone; the owner approves sharing. Do not create an unbound record, guess among fallback names, or move a binding to another phone. Pass that device explicitly to every device-scoped tool. Ordinary input requires an `expected_frame_id` from that phone captured after its last input completed and no more than 120 seconds ago. Never default to another phone if the requested one is unavailable. The legacy standalone app may expose optional device arguments instead.
 2. Call `ensure_session` at the start of each task, with just `device_id`; `ensure_session` and `prepare_session` do not require `expected_frame_id` because they observe their own fresh frames. It returns the current screen and reuses a compatible calibration. Follow actionable setup errors; only the owner can approve Bluetooth pairing, screen sharing, and unlocking.
-3. Inspect the current screen, perform one action, and inspect the returned screen. If a transition is unfinished, call `get_latest_screenshot` before deciding what to do next.
+3. Inspect the current screen, perform one action, then call `get_latest_screenshot` and inspect the result before deciding on the next action. Fetch it after preparation as well; images captured during an action do not qualify as post-action observations.
 4. Prefer `pointer_tap` for visible controls. Coordinates are whole-screen fractions from 0 to 1, with the origin at top-left. Do not apply Safari viewport offsets. Focus a field before `type_text`; text supports US-layout ASCII up to 500 characters.
 5. Launch apps with `send_key` using `cmd+h`, `cmd+space`, replace the search query, type the app name, inspect the result, then press Enter.
 6. Use `scroll` for lists and `advance_feed(dy: 1 or -1)` for one Reels, TikTok, or Shorts transition. Inspect the account or title after each feed action. Video animation alone does not prove that the item changed.
@@ -33,9 +33,9 @@ retry a failed preparation with blind clicks. The UI opens directly on the loopb
 without an operator token; the LAN capture link remains private and device-specific.
 
 
-When screenshot `ageMilliseconds` is already two seconds or older, wait for a new frame
-before input; fetching the latest image does not make an old capture fresh. A rejection
-before input should be followed by another screenshot, never a repeated click on an old ID.
+Input requires a screenshot no more than 120 seconds old that was captured after the last
+input completed; the latest live capture must independently be no more than five seconds old.
+A rejection before input should be followed by another screenshot, never a repeated click on an old ID.
 Portable and native `scroll(dy)` now share the HID sign: positive advances content upward
 on iOS. Older installed portable builds inverted this sign. Wheel sensitivity varies by app;
 small wheel values may do nothing, and the wrong direction can pull Reels into refresh/black
