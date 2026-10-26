@@ -1,6 +1,13 @@
 """MCP JSON-RPC over stdio; stdout is reserved for protocol messages."""
 import json
 import sys
+import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from urllib.error import URLError
+
+LOG = logging.getLogger('oiu.mcp')
+SERVER_DOWN = 'Server not running — start it with: open-iphone-use serve'
 from .cli import call
 from .core import ACTIONS, PREPARATION
 
@@ -87,29 +94,68 @@ def handle(args, method, params):
             content.extend([{"type": "image", "mimeType": "image/jpeg", "data": frame["base64"]},
                             {"type": "text", "text": json.dumps({k: v for k, v in frame.items() if k != "base64"})}])
         return dict(content=content, isError=isinstance(result, dict) and result.get("ok") is False)
-    except (KeyError, ValueError, StopIteration, OSError) as error:
-        return dict(content=[{"type": "text", "text": str(error)}], isError=True)
+    except (URLError, ConnectionError, TimeoutError) as error:
+        LOG.warning('Server connection unavailable: %s', error)
+        return dict(content=[{"type": "text", "text": SERVER_DOWN}], isError=True)
+    except Exception as error:
+        LOG.exception('MCP tool failed')
+        return dict(content=[{"type": "text", "text": str(error) or type(error).__name__}], isError=True)
+
+
+def configure_logging(args):
+    from .permissions import secure_directory
+    from .bootstrap import private_file
+    try:
+        directory=Path(args.state)
+        secure_directory(directory)
+        path=directory/'mcp.log'
+        if not path.exists(): private_file(path,b'')
+        handler=RotatingFileHandler(path,maxBytes=1024*1024,backupCount=2,encoding='utf-8')
+        handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+        LOG.addHandler(handler); LOG.setLevel(logging.INFO); LOG.propagate=False
+        return handler
+    except OSError:
+        # Diagnostics must never go to the JSON-RPC stdout stream.
+        handler=logging.StreamHandler(sys.stderr)
+        LOG.addHandler(handler); LOG.propagate=False
+        return handler
 
 
 def run(args):
-    while True:
-        line = sys.stdin.buffer.readline(1024 * 1024 + 1)
-        if not line:
-            return
-        if len(line) > 1024 * 1024:
-            return  # Terminate rather than interpret a trailing fragment as another request.
-        request = None
-        try:
-            request = json.loads(line)
-            if not isinstance(request, dict) or request.get("jsonrpc") != "2.0" or not isinstance(request.get("method"), str):
-                raise ValueError("Invalid request")
-            if "id" not in request:
-                continue
-            if not isinstance(request.get("params", {}), dict):
-                raise ValueError("params must be an object")
-            result = handle(args, request["method"], request.get("params", {}))
-            response = dict(jsonrpc="2.0", id=request["id"], result=result)
-        except (ValueError, LookupError, TypeError) as error:
-            response = dict(jsonrpc="2.0", id=request.get("id") if isinstance(request, dict) else None,
-                            error=dict(code=-32601 if isinstance(error, LookupError) else -32600, message=str(error)))
-        print(json.dumps(response), flush=True)
+    handler=configure_logging(args)
+    try:
+        while True:
+            try: line=sys.stdin.buffer.readline(1024*1024+1)
+            except (OSError,ValueError): return  # Client closed the transport.
+            if not line: return  # EOF is a client disconnect, not a server failure.
+            oversized=len(line)>1024*1024
+            if oversized:
+                while not line.endswith(b'\n'):
+                    try: line=sys.stdin.buffer.readline(1024*1024+1)
+                    except (OSError,ValueError): return
+                    if not line: break
+            request=None
+            try:
+                if oversized: raise ValueError('Request exceeds 1 MiB')
+                request=json.loads(line)
+                if not isinstance(request,dict) or request.get('jsonrpc')!='2.0' or not isinstance(request.get('method'),str):
+                    raise ValueError('Invalid request')
+                if 'id' not in request: continue
+                if not isinstance(request.get('params',{}),dict): raise ValueError('params must be an object')
+                result=handle(args,request['method'],request.get('params',{}))
+                response=dict(jsonrpc='2.0',id=request['id'],result=result)
+            except Exception as error:
+                LOG.exception('MCP request failed')
+                response=dict(jsonrpc='2.0',id=request.get('id') if isinstance(request,dict) else None,
+                              error=dict(code=-32601 if isinstance(error,LookupError) else -32600,message=str(error)))
+            try: print(json.dumps(response),flush=True)
+            except (BrokenPipeError,OSError):
+                LOG.info('MCP client closed stdout')
+                # Prevent a second BrokenPipeError during interpreter stdout teardown.
+                import os
+                try:
+                    with open(os.devnull,'w') as sink: os.dup2(sink.fileno(),sys.stdout.fileno())
+                except (OSError,ValueError): pass
+                return
+    finally:
+        LOG.removeHandler(handler); handler.close()
