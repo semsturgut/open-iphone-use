@@ -19,15 +19,14 @@ from .state import StateLease
 def connection(args):
     file=Path(args.state)/'connection.json'
     saved=json.loads(file.read_text()) if file.exists() else {}
-    url=args.url or os.environ.get('OIU_URL') or saved.get('url','http://127.0.0.1:27891')
+    url=args.url or os.environ.get('OIU_URL') or saved.get('url','http://127.0.0.1:27893')
     return url.rstrip('/'), saved.get('ca') if url.rstrip('/')==saved.get('url') else None
 
 
 def call(args,path,data=None,method=None):
-    registry=json.loads((Path(args.state)/'state.json').read_text())
     url,ca=connection(args)
     request=Request(url+path,data=json.dumps(data).encode() if data is not None else None,method=method,
-                    headers={'Authorization':'Bearer '+registry['admin_token'],'Content-Type':'application/json'})
+                    headers={'Content-Type':'application/json'})
     try:
         with urlopen(request,timeout=95,context=ssl.create_default_context(cafile=ca)) as response: return json.load(response)
     except HTTPError as error:
@@ -38,16 +37,35 @@ def call(args,path,data=None,method=None):
 
 
 def show_link(args, device):
-    from .qr import terminal
+    from .qr import terminal, enable_ansi
     setup=call(args,'/api/setup')
     origin=setup['capture_origin'] or connection(args)[0]
     url=origin+device['capture_path']
     print(f"{device['name']} [{device['device_id']}]\n{url}")
-    print(terminal(url,ansi=sys.stdout.isatty()))
+    if sys.stdout.isatty() and not enable_ansi():
+        print('This console cannot enforce black-on-white QR output. Use Windows Terminal or open the link above.')
+    else:
+        qr=terminal(url,ansi=sys.stdout.isatty())
+        try: qr.encode(sys.stdout.encoding or 'utf-8')
+        except UnicodeEncodeError: qr='This output encoding cannot render QR half-blocks. Open the link above in a Unicode terminal.'
+        print(qr)
     if setup.get('certificate_url'):
         print('First use: install the public CA on the iPhone, verify SHA-256 and enable full trust.')
         print(setup['certificate_url'] + '\nCA SHA-256: ' + setup['ca_fingerprint'])
     print('Scan on this Bluetooth-paired iPhone. The server must remain running; Bluetooth HID is required.')
+
+
+def print_running(url,status,log):
+    on=status.get('bluetooth_on',False)
+    dot=('● ' if sys.stdout.isatty() else '')+('on' if on else 'off')
+    from .qr import enable_ansi
+    if sys.stdout.isatty() and enable_ansi(): dot=('\x1b[32m' if on else '\x1b[31m')+dot+'\x1b[0m'
+    print('Open iPhone Use is running')
+    print('Web UI:  '+url)
+    print(f"Bluetooth: {dot}  ({status.get('bluetooth_state','unknown')})")
+    print('Add a phone: open-iphone-use new')
+    print('Stop:      open-iphone-use stop')
+    print('Log:       '+str(log),flush=True)
 
 
 def serve(args,parser):
@@ -85,7 +103,7 @@ def serve(args,parser):
         # Auto mode follows interface changes; explicit --host remains a fixed bind.
         follow_lan = not args.local_http and not args.host and not args.cert
         bind_host = '0.0.0.0' if follow_lan else host
-        server=Server((bind_host,args.port),registry,context)
+        server=Server((bind_host,args.port),registry,context,operator=args.local_http)
         url=f"{'http' if args.local_http else 'https'}://{host}:{server.server_port}"
         registry.public_url=url
         ui_url=url
@@ -107,22 +125,9 @@ def serve(args,parser):
         registry.shutdown=server.shutdown
         def stop(*_): threading.Thread(target=server.shutdown,daemon=True).start()
         signal.signal(signal.SIGINT,stop); signal.signal(signal.SIGTERM,stop)
-        print(f'Open iPhone Use: {url}',flush=True)
-        if args.capture_only: print('Bluetooth: capture-only mode (no input)',flush=True)
-        elif hasattr(radio,'startup'):
-            print('Bluetooth: '+radio.startup['state']+(' — '+radio.startup['error'] if radio.startup.get('error') else ''),flush=True)
-        else: print('Bluetooth: native HID radio started; approve the OS pairing/permission prompts',flush=True)
-        if public:
-            print(f'Public CA certificate: {public}',flush=True)
-            print('CA SHA-256: '+hashlib.sha256(Path(public).read_bytes()).hexdigest().upper(),flush=True)
-            if public_server: print(f'Install public CA on iPhone: http://{host}:{public_server.server_port}/root-ca.cer',flush=True)
-            print('On iPhone, install the profile, verify its fingerprint, then enable it in Settings > General > About > Certificate Trust Settings. The localhost web UI needs no certificate trust; LAN browsers must trust this CA.',flush=True)
-        print('Pair on each iPhone: Settings > Accessibility > Touch > AssistiveTouch > Devices > Bluetooth Devices > Open iPhone Use (Windows may show the PC name). Keep the phone unlocked.',flush=True)
-        if not args.no_print_secrets:
-            print(f'Web UI (private operator link): {ui_url}/#{registry.admin_token}',flush=True)
-            print('Pair over Bluetooth, then run open-iphone-use new to get that phone’s private link and QR.',flush=True)
-        else: print(f'Web UI: {ui_url} — use open-iphone-use token to log in; sharing links appear there.',flush=True)
-        print('Approve Start sharing in Safari. Tap a live screen in the grid; the first tap prepares its control session with Safari visible. No pairing UUID configuration is needed.',flush=True)
+        print_running(ui_url,registry.global_status(),registry.directory/'server.log' if os.environ.get('OIU_DAEMON_START_ID') else 'terminal (--foreground)')
+        if hasattr(radio,'startup') and radio.startup.get('error'):
+            print('Bluetooth startup: '+radio.startup['error'],file=sys.stderr,flush=True)
         server.serve_forever()
     finally:
         if server: server.server_close()
@@ -140,7 +145,9 @@ def main():
     parser.add_argument('--url',default=None)
     sub=parser.add_subparsers(dest='command',required=True)
     start=sub.add_parser('serve')
-    start.add_argument('--daemon',action='store_true',help='Run the server in the background until stop')
+    mode=start.add_mutually_exclusive_group()
+    mode.add_argument('--foreground',action='store_true',help='Run in the terminal for debugging (default: background)')
+    mode.add_argument('--daemon',action='store_true',help=argparse.SUPPRESS)
     start.add_argument('--host',help='LAN IPv4 address; detected automatically')
     start.add_argument('--port',type=int,default=27891)
     start.add_argument('--ui-port',type=int,default=27893)
@@ -150,8 +157,8 @@ def main():
     start.add_argument('--capture-only',action='store_true',help='Explicitly disable HID for diagnostics')
     start.add_argument('--certificate-port',type=int,default=27892)
     start.add_argument('--no-certificate-server',action='store_true')
-    start.add_argument('--no-print-secrets',action='store_true')
-    sub.add_parser('devices'); sub.add_parser('token'); sub.add_parser('mcp'); sub.add_parser('stop')
+    start.add_argument('--no-print-secrets',action='store_true',help=argparse.SUPPRESS)
+    sub.add_parser('devices'); sub.add_parser('mcp'); sub.add_parser('stop')
     sub.add_parser('bluetooth',help='List Bluetooth-connected HID phones')
     for name in ('new','add'):
         add=sub.add_parser(name,help='Select a connected Bluetooth phone and print its private link + QR')
@@ -171,9 +178,11 @@ def main():
     args=parser.parse_args()
     try:
         if args.command=='serve':
-            if args.daemon:
+            if not args.foreground:
+
                 from .service import daemon
-                print(json.dumps(daemon(args,sys.argv[1:],call),indent=2))
+                result=daemon(args,sys.argv[1:],call)
+                print_running(result['url'],result,result['log'])
             else: serve(args,parser)
         elif args.command=='stop':
             from .service import stop
@@ -181,7 +190,6 @@ def main():
         elif args.command=='register-agents':
             from .registrations import configure
             configure(Path(args.home),Path(sys.executable).parent/('open-iphone-use.exe' if os.name=='nt' else 'open-iphone-use'),args.skill,args.uninstall)
-        elif args.command=='token': print(json.loads((Path(args.state)/'state.json').read_text())['admin_token'])
         elif args.command=='devices': print(json.dumps(call(args,'/api/devices'),indent=2))
         elif args.command=='bluetooth': print(json.dumps(call(args,'/api/bluetooth'),indent=2))
         elif args.command in ('new','add'):

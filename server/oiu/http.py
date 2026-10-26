@@ -2,6 +2,7 @@
 import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import ipaddress
 from pathlib import Path
 import secrets
 import ssl
@@ -12,6 +13,10 @@ from urllib.parse import parse_qs, urlsplit
 from .core import MAX_FRAME
 
 WEB = Path(__file__).parent / "web"
+
+
+class OperatorDenied(PermissionError):
+    pass
 
 
 def tls_context(cert, key):
@@ -25,11 +30,12 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, registry, context=None, watchdog=True):
+    def __init__(self, address, registry, context=None, watchdog=True, operator=None):
         self.registry = registry
         self.capacity = threading.BoundedSemaphore(64)
         self.stopped = threading.Event()
         super().__init__(address, Handler)
+        self.operator = ipaddress.ip_address(self.server_address[0]).is_loopback if operator is None else operator
         if context:
             self.socket = context.wrap_socket(self.socket, server_side=True, do_handshake_on_connect=False)
         self.watchdog = threading.Thread(target=self._watch, daemon=True)
@@ -101,9 +107,15 @@ class Handler(BaseHTTPRequestHandler):
         return data
 
     def admin(self):
-        token = self.headers.get("Authorization", "").removeprefix("Bearer ")
-        if not secrets.compare_digest(token, self.server.registry.admin_token):
-            raise PermissionError("Operator credential required")
+        # Network boundary, not a bearer credential: never authorize LAN requests,
+        # forwarded headers, DNS-rebound Host names or cross-site browser actions.
+        if not self.server.operator or not ipaddress.ip_address(self.client_address[0]).is_loopback:
+            raise OperatorDenied('Operator endpoints are available only on the loopback Web UI')
+        host=urlsplit('http://'+self.headers.get('Host',''))
+        if host.hostname not in ('localhost','127.0.0.1','::1') or host.port != self.server.server_port:
+            raise OperatorDenied('Loopback Host required for operator access')
+        if self.headers.get('Sec-Fetch-Site') == 'cross-site':
+            raise OperatorDenied('Cross-site operator request rejected')
 
     def do_GET(self):
         self.dispatch(False)
@@ -128,6 +140,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(registry.remove(parts[2]))
                 return self.reply({'error': 'Not found'}, 404)
             if not post and path.path in ("/", "/app.js", "/style.css", "/qrcode.js"):
+                self.admin()
                 file = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/qrcode.js": "qrcode.js"}[path.path]
                 mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css", "/qrcode.js": "text/javascript"}[path.path]
                 return self.reply((WEB / file).read_bytes(), mime=mime)
@@ -172,12 +185,15 @@ class Handler(BaseHTTPRequestHandler):
             if path.path == "/api/devices":
                 if post:
                     device = registry.create_bluetooth(json.loads(self.body(4096)).get("bt_id"))
-                    return self.reply(dict(device_id=device.id, name=device.name, bt_id=device.bt_id, capture_path=f"/capture?token={device.token}"))
+                    item=next(d for d in registry.list(include_links=True) if d['device_id']==device.id)
+                    return self.reply(item)
                 return self.reply(registry.list(include_links=True))
             if path.path == '/api/bluetooth' and not post:
                 return self.reply(registry.candidates())
             if path.path == '/api/health' and not post:
-                return self.reply(dict(ok=True, instance_id=getattr(registry, 'instance_id', '')))
+                return self.reply(dict(ok=True, instance_id=getattr(registry, 'instance_id', ''), **registry.global_status()))
+            if path.path == '/api/status' and not post:
+                return self.reply(registry.global_status())
             if path.path == '/api/shutdown' and post:
                 shutdown = getattr(registry, 'shutdown', None)
                 if shutdown is None: raise ValueError('Service shutdown unavailable')
@@ -206,6 +222,8 @@ class Handler(BaseHTTPRequestHandler):
                     summary = next(d for d in registry.list() if d['device_id'] == device.id)
                     return self.reply(dict(device=summary, backend=result))
             self.reply({"error": "Not found"}, 404)
+        except OperatorDenied as error:
+            self.reply({"error": str(error)}, 403)
         except PermissionError as error:
             self.reply({"error": str(error)}, 401)
         except (KeyError, StopIteration):

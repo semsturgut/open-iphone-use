@@ -13,7 +13,7 @@ def daemon(args, argv, call):
     directory = secure_directory(args.state)
     marker = uuid.uuid4().hex
     command = [sys.executable, '-m', 'oiu.cli', *[value for value in argv if value != '--daemon']]
-    if '--no-print-secrets' not in command: command.append('--no-print-secrets')
+    if '--foreground' not in command: command.append('--foreground')
     options = {'creationflags': subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
     log = directory / 'server.log'
     fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
@@ -27,8 +27,10 @@ def daemon(args, argv, call):
             raise ValueError(f'Server did not start (another server may own this state). Inspect private log: {log}')
         try:
             saved = json.loads((directory/'connection.json').read_text())
-            if saved.get('instance_id') == marker and call(args, '/api/health').get('instance_id') == marker:
-                return dict(ok=True, url=saved['url'], pid=process.pid, log=str(log))
+            if saved.get('instance_id') == marker:
+                health=call(args,'/api/health')
+                if health.get('instance_id') == marker:
+                    return dict(health,url=saved['url'],pid=process.pid,log=str(log))
         except (OSError, ValueError): pass
         time.sleep(.1)
     process.terminate()

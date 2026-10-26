@@ -86,6 +86,51 @@ class ServerTests(unittest.TestCase):
             error.close()
             raise
 
+    def test_loopback_is_automatic_but_dns_rebinding_and_cross_site_requests_are_rejected(self):
+        with urlopen(self.url+'/api/devices',timeout=2) as response: self.assertEqual(len(json.load(response)),2)
+        with urlopen(self.url+'/',timeout=2) as response: self.assertNotIn(b'id="token"',response.read())
+        for headers in ({'Host':f'evil.example:{self.server.server_port}'},
+                        {'Host':f'192.168.1.2:{self.server.server_port}'}, {'Sec-Fetch-Site':'cross-site'}):
+            with self.assertRaises(HTTPError) as error: self.api('/api/devices',extra=headers)
+            self.assertEqual(error.exception.code,403)
+        self.server.operator=False
+        try:
+            for route in ('/','/app.js','/api/setup','/api/devices','/api/health','/api/status'):
+                with self.assertRaises(HTTPError) as error: self.api(route)
+                self.assertEqual(error.exception.code,403)
+            # The private capture link and uploads still work on the capture listener.
+            with urlopen(self.url+'/capture?token='+self.a.token,timeout=2) as response: self.assertEqual(response.status,200)
+            self.api('/api/frame',JPEG,token=self.a.token,capture=True)
+        finally: self.server.operator=True
+
+    def test_cli_uses_loopback_without_a_client_credentials_file(self):
+        client_state=str(Path(self.tmp.name)/'empty-client')
+        output=subprocess.run([sys.executable,'-m','oiu.cli','--state',client_state,'--url',self.url,'devices'],
+                              check=True,capture_output=True,text=True)
+        self.assertEqual(len(json.loads(output.stdout)),2)
+        self.assertFalse(Path(client_state).exists())
+
+    def test_expected_frame_window_accepts_recent_history_and_preparation_needs_no_id(self):
+        self.a.upload(JPEG); first=self.a.frame_id
+        self.a.upload(JPEG+b'next')
+        self.assertTrue(self.a.action('click',{'expectedFrameID':first})['ok'])
+        self.a.history.clear(); self.a.history.append((first,time.monotonic()-2.1))
+        with self.assertRaises(ValueError): self.a.action('click',{'expectedFrameID':first})
+        self.assertTrue(self.a.action('ensure_session',{})['ok'])
+        self.assertTrue(self.a.action('prepare_session',{})['ok'])
+        for tool in tools():
+            if tool['name'] in ('ensure_session','prepare_session'):
+                self.assertNotIn('expected_frame_id',tool['inputSchema']['required'])
+
+    def test_duplicate_bluetooth_names_remain_distinguishable(self):
+        self.registry.radio.items[0]['name']='iPhone'
+        self.registry.radio.items[1]['name']='iPhone'
+        devices=self.api('/api/devices')
+        self.assertNotEqual(devices[0]['name'],devices[1]['name'])
+        self.assertTrue(all(d['bluetooth_name']=='iPhone' for d in devices))
+        candidates=self.api('/api/bluetooth')
+        self.assertNotEqual(candidates[0]['name'],candidates[1]['name'])
+
     def test_operator_static_assets(self):
         web = Path(__file__).resolve().parents[1] / 'oiu' / 'web'
         for route, filename, mime in [('/', 'index.html', 'text/html'),
@@ -110,9 +155,11 @@ class ServerTests(unittest.TestCase):
         self.assertNotEqual(self.a.frame_id, self.b.frame_id)
         self.assertEqual(len(self.api('/api/devices')), 2)
         self.assertTrue(all(d['capture_active'] for d in self.api('/api/devices')))
-        with self.assertRaises(HTTPError) as error:
-            self.api('/api/devices', token=self.a.token)
-        self.assertEqual(error.exception.code, 401)
+        self.server.operator=False
+        try:
+            with self.assertRaises(HTTPError) as error: self.api('/api/devices', token=self.a.token)
+            self.assertEqual(error.exception.code,403)
+        finally: self.server.operator=True
         with self.assertRaises(HTTPError):
             self.api('/api/frame', JPEG, self.registry.admin_token, True)
         reloaded = Registry(self.tmp.name)
@@ -131,14 +178,13 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(device['capture_path'],
                              '/capture?token=' + self.registry.devices[device['device_id']].token)
         self.assertEqual(created['capture_path'], before[-1]['capture_path'])
-        for headers in ({}, {'Authorization': 'Bearer invalid'},
-                        {'Authorization': 'Bearer ' + self.a.token},
-                        {'Authorization': 'Bearer ' + self.registry.invite_token}):
-            with self.subTest(headers=list(headers)), self.assertRaises(HTTPError) as error:
-                urlopen(Request(self.url + '/api/devices', headers=headers), timeout=2)
-            self.assertEqual(error.exception.code, 401)
-            self.assertNotIn(self.a.token.encode(), error.exception.read())
-            error.exception.close()
+        self.server.operator=False
+        try:
+            for headers in ({}, {'Authorization':'Bearer '+self.registry.admin_token}):
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(Request(self.url+'/api/devices',headers=headers),timeout=2)
+                self.assertEqual(error.exception.code,403); error.exception.close()
+        finally: self.server.operator=True
         # Recreate the registry and read the links through the authenticated API.
         self.server.registry = Registry(self.tmp.name)
         after = self.api('/api/devices')
@@ -159,14 +205,12 @@ class ServerTests(unittest.TestCase):
         self.b.upload(JPEG)
         old_token, other_token = self.a.token, self.b.token
         path = f'/api/devices/{self.a.id}'
-        for token in ('invalid', old_token, self.registry.invite_token):
-            with self.assertRaises(HTTPError) as error:
-                self.api(path, token=token, method='DELETE')
-            self.assertEqual(error.exception.code, 401)
-        with self.assertRaises(HTTPError) as error:
-            urlopen(Request(self.url + path, method='DELETE'), timeout=2)
-        self.assertEqual(error.exception.code, 401)
-        error.exception.close()
+        self.server.operator=False
+        try:
+            for token in ('invalid',old_token,self.registry.admin_token):
+                with self.assertRaises(HTTPError) as error: self.api(path,token=token,method='DELETE')
+                self.assertEqual(error.exception.code,403)
+        finally: self.server.operator=True
         with self.assertRaises(HTTPError) as error:
             self.api(path, extra={'Origin': 'https://hostile.example'}, method='DELETE')
         self.assertEqual(error.exception.code, 401)
@@ -339,12 +383,14 @@ class ServerTests(unittest.TestCase):
     def test_cli_serve_shutdown_and_lease_release(self):
         state = str(Path(self.tmp.name)/'cli-state')
         process = subprocess.Popen([sys.executable, '-m', 'oiu.cli', '--state', state,
-                                    'serve', '--local-http', '--capture-only', '--port', '0'], stdout=subprocess.PIPE,
+                                    'serve', '--foreground', '--local-http', '--capture-only', '--port', '0'], stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True)
         try:
             line = process.stdout.readline().strip()
-            self.assertTrue(line.startswith('Open iPhone Use: http://127.0.0.1:'))
-            url = line.split('Open iPhone Use: ')[1]
+            self.assertEqual(line,'Open iPhone Use is running')
+            line=process.stdout.readline().strip()
+            self.assertTrue(line.startswith('Web UI:  http://127.0.0.1:'))
+            url=line.split('Web UI:  ')[1]
             token = json.loads((Path(state)/'state.json').read_text())['admin_token']
             with urlopen(Request(url+'/api/devices', headers={'Authorization': 'Bearer '+token}), timeout=2) as response:
                 self.assertEqual(json.load(response), [])
@@ -364,8 +410,11 @@ class ServerTests(unittest.TestCase):
     def test_bluetooth_first_creation_requires_connected_unique_selected_peer(self):
         candidates = self.api('/api/bluetooth')
         self.assertEqual([p['id'] for p in candidates if p['available']], ['bt-c'])
-        with self.assertRaises(HTTPError) as error: self.api('/api/bluetooth',token=self.a.token)
-        self.assertEqual(error.exception.code,401)
+        self.server.operator=False
+        try:
+            with self.assertRaises(HTTPError) as error: self.api('/api/bluetooth',token=self.a.token)
+            self.assertEqual(error.exception.code,403)
+        finally: self.server.operator=True
         for body in ({'name':'arbitrary'}, {'bt_id':'missing'}, {'bt_id':'bt-a'}):
             with self.assertRaises(HTTPError) as error:
                 self.api('/api/devices',json.dumps(body).encode())
@@ -430,7 +479,7 @@ class ServerTests(unittest.TestCase):
     def test_name_fallback_and_sanitization_never_use_another_peers_name(self):
         self.registry.radio.items[2].pop('name')
         candidate=next(p for p in self.api('/api/bluetooth') if p['id']=='bt-c')
-        self.assertEqual(candidate['name'],'iPhone (bt-c)')
+        self.assertEqual(candidate['name'],'iPhone')
         self.registry.radio.items[2]['name']='Unsafe\x1b[31m\nName'
         created=self.api('/api/devices',b'{"bt_id":"bt-c"}')
         self.assertNotIn('\x1b',created['name'])
@@ -452,10 +501,12 @@ class ServerTests(unittest.TestCase):
         original_ca = Path(ca).read_bytes()
         try:
             with patch('oiu.bootstrap.lan_address', return_value='172.20.10.2'):
-                # No operator credential means no network/certificate mutation either.
-                with self.assertRaises(HTTPError) as unauthorized:
-                    urlopen(self.url + '/api/setup', timeout=2)
-                unauthorized.exception.close()
+                # The capture listener role never permits operator mutations.
+                self.server.operator=False
+                try:
+                    with self.assertRaises(HTTPError) as unauthorized: urlopen(self.url+'/api/setup',timeout=2)
+                    self.assertEqual(unauthorized.exception.code,403); unauthorized.exception.close()
+                finally: self.server.operator=True
                 self.assertEqual(changes, [])
                 setup = self.api('/api/setup')
                 self.assertEqual(setup['capture_origin'], f'https://172.20.10.2:{tls.server_port}')

@@ -22,19 +22,22 @@ with tempfile.TemporaryDirectory(prefix='oiu-smoke-') as directory:
     env=dict(os.environ)
     env.pop('OIU_DISABLE_BLUETOOTH',None)
     env.pop('OIU_MAC_HELPER',None)
-    process=subprocess.Popen([cli,'--state',directory,'serve','--port','0','--ui-port','0',
+    process=subprocess.Popen([cli,'--state',directory,'serve','--foreground','--port','0','--ui-port','0',
                               '--certificate-port','0','--no-print-secrets'],
                              env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     try:
         line=process.stdout.readline().strip()
-        assert line.startswith('Open iPhone Use: https://'),(line,process.stderr.read() if process.poll() is not None else '')
-        public=line.split('Open iPhone Use: ')[1]
+        assert line=='Open iPhone Use is running',line
         connection=json.loads((state/'connection.json').read_text())
+        public=connection['public_url']
         saved=json.loads((state/'state.json').read_text())
         context=ssl.create_default_context(cafile=str(state/'certificates/root-ca.pem'))
-        with urlopen(public+'/',context=context,timeout=5) as response: assert b'Open iPhone Use' in response.read()
+        with urlopen(connection['url']+'/',timeout=5) as response: assert b'Open iPhone Use' in response.read()
+        try: urlopen(public+'/',context=context,timeout=5)
+        except HTTPError as error: assert error.code==403;error.close()
+        else: raise AssertionError('Operator UI must not be exposed on capture HTTPS')
         def api(path,body=None,headers=None):
-            auth={'Authorization':'Bearer '+saved['admin_token']}
+            auth={}
             auth.update(headers or {})
             with urlopen(Request(connection['url']+path,data=body,headers=auth),timeout=5) as response: return json.load(response)
         setup=api('/api/setup')
