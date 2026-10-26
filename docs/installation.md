@@ -67,25 +67,43 @@ the current user and SYSTEM; FAT/exotic filesystem/ACL failures are reported.
 
 ## Agent registration and Skill
 
-Detected Codex, Claude Code and Cursor installations receive only an `open-iphone-use`
-stdio MCP entry. Codex uses `~/.codex/config.toml`; Claude Code uses `~/.claude.json`;
-Cursor uses `~/.cursor/mcp.json`. Existing entries, unrelated settings and approval
-policies are retained. Replacing this product's previous entry creates an owner-private
-backup and records the previous value. Syntax errors or symlinked configs are refused
-rather than overwritten. The shared Skill is installed in `~/.agents/skills`; Claude also
-receives its native `~/.claude/skills` copy when detected.
+Detected clients receive only this product's stdio MCP entry:
 
-Uninstall restores/removes only entries and Skill files still matching what setup wrote.
-User modifications are left in place with a diagnostic. Full backups and the registration
-manifest remain under `~/.local/share/open-iphone-use/registrations`. They can contain
-private client settings; do not publish them. Runtime removal preserves the separate
-phone-state directory and CA so a later reinstall does not force certificate re-trust.
+| Client | Config | Entry |
+| --- | --- | --- |
+| Codex | `~/.codex/config.toml` | `mcp_servers.open-iphone-use` |
+| Claude Code | `~/.claude.json` | `mcpServers.open-iphone-use` |
+| Cursor | `~/.cursor/mcp.json` | `mcpServers.open-iphone-use` |
+| OpenCode | `~/.config/opencode/opencode.jsonc` (preferred when present), or `.json` | `mcp.open-iphone-use`: local command array, enabled |
+| Command Code | `~/.commandcode/mcp.json` | `mcpServers.open-iphone-use`: stdio transport, enabled |
+
+Every command names the installed venv CLI and `mcp`. Legacy `/Applications/Open iPhone Use.app/…`
+entries are replaced. Unrelated settings and approval policies remain intact. OpenCode
+comments, trailing commas and surrounding text are preserved. Each distinct pre-edit config
+has a private backup under `~/.local/share/open-iphone-use/registrations`; syntax errors and
+symlinked configs are refused. Backups may contain private settings: never publish them.
+
+The only installed canonical skill is `~/.agents/skills/open-iphone-use/SKILL.md` (file 644,
+directory 755 on POSIX). Detected Claude/Command Code clients get directory aliases at
+`~/.claude/skills/open-iphone-use` and `~/.commandcode/skills/open-iphone-use`, targeting
+`../../.agents/skills/open-iphone-use`. Windows uses a directory symlink, junction, or copy
+fallback if privileges/filesystem prevent linking. Rerunning registration refreshes the fallback.
+The runtime's `agent-skill.md` is a source template, not another discovered skill.
+Registration replaces stale product copies/old app aliases and removes product
+`*.open-iphone-use-backup` files in known client/skill locations; it is idempotent.
+
+Uninstall restores/removes only unchanged MCP entries, never resurrecting the removed app.
+Modified MCP entries are retained with a diagnostic. Managed skill aliases are removed and
+an unchanged canonical skill is removed; OS pairing and the separate phone-state directory/CA
+remain intact. Registration manifests and config backups remain for owner recovery.
 Uninstalling Linux system packages, revoking OS pairings or deleting the CA is deliberately
 an explicit owner/system action rather than part of removing this user's CLI.
 
 Restart detected clients after setup. If a client was installed later, re-run setup or run:
 
 ```sh
+open-iphone-use register-agents
+# To install a specific updated source:
 open-iphone-use register-agents --skill /path/to/macos/Resources/open-iphone-use-skill/SKILL.md
 ```
 

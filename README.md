@@ -21,7 +21,9 @@ open-iphone-use serve
 ```
 
 Setup installs an isolated Python runtime, the native macOS HID helper when applicable,
-and the MCP registration/skill for detected Codex, Claude Code and Cursor clients.
+and MCP registration for detected Codex, Claude Code, Cursor, OpenCode and Command Code clients.
+The canonical skill lives only at `~/.agents/skills/open-iphone-use/SKILL.md`; client
+skill directories use relative aliases (Windows junction/copy fallback).
 macOS needs Xcode/Swift 6; Linux needs BlueZ/D-Bus; Windows needs a peripheral-capable
 Bluetooth driver. Follow owner-controlled Bluetooth permission and pairing prompts.
 Use the checked-out installer for this development branch; remote `main` may be older.
@@ -112,12 +114,28 @@ capture token permanently. Other phones and OS Bluetooth bonds remain intact.
 
 Setup registers `open-iphone-use mcp` as a stdio server and installs the bundled
 [Open iPhone Use skill](macos/Resources/open-iphone-use-skill/SKILL.md). Restart your MCP
-client after setup. Use `list_bluetooth_candidates`/`create_device` for requested setup;
+client after setup. Run `open-iphone-use register-agents` to register clients installed later.
+OpenCode JSON/JSONC comments and unrelated settings are retained; private backups precede
+config edits. Old application entries, duplicate skills and product backup files are cleaned.
+MCP stays available when the web server is down: tools return
+“Server not running — start it with: open-iphone-use serve”; start the service and retry
+without restarting the MCP client. Diagnostics go to `~/.open-iphone-use/mcp.log` (or
+`--state`/`OIU_STATE`), never protocol stdout. EOF/closed pipes disconnect cleanly.
+Use `list_bluetooth_candidates`/`create_device` for requested setup;
 then `list_devices`, select an explicit `device_id`, inspect its screenshot and act.
 `ensure_session` and `prepare_session` obtain their own fresh frames and **do not require
 expected_frame_id**. Other input accepts an ID from that phone's last approximately two
 seconds of frames, not only the latest frame. Old, foreign or stopped-stream IDs fail.
 Inspect the returned image after each action. HID acceptance alone is not UI success.
+
+After a later server restart, the helper publishes the same HID service and advertises
+again for bonded phones; macOS also restores CoreBluetooth services/subscriptions when
+available. Keep using the same installation and state directory. iOS owns reconnection:
+if a phone stays red, unlock it and select the existing **Open iPhone Use** entry under
+AssistiveTouch > Devices > Bluetooth Devices. Re-pair only if the OS lost its bond.
+Automatic reconnect timing, driver limits and OS-managed GATT caching still need hardware
+verification. Bluetooth reconnection does not resume Safari screen sharing; approve it again.
+See [platform reconnect details](docs/headless-server.md#bluetooth-reconnection).
 
 ## Network and safety
 

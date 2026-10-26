@@ -207,3 +207,46 @@ are exposed in devices/status and MCP. Global/tile lights are green when connect
 red otherwise, explicitly stating that control will not work. `/api/status` provides
 global status to the loopback UI. The capture listener accepts only scoped capture
 requests, even from a local client; it never authorizes operator actions with a token.
+
+
+## Bluetooth reconnection
+
+On each `serve` launch the HID service is published and connectable advertising resumes;
+known bonded centrals are accepted without creating new device records or deleting OS bonds.
+All input still requires that exact peer's keyboard/pointer subscriptions. No cached peer ID
+is treated as evidence of a live connection.
+
+macOS uses a stable peripheral restoration identifier derived from the radio state directory,
+adopts restored HID services by report-reference ID, restores each subscribed central separately,
+and resumes advertising after a disconnect or interrupted advertising. A periodic check avoids
+repeatedly starting an already active advertiser. The same full HID UUID/report map is retained.
+[Apple's restoration API](https://developer.apple.com/documentation/corebluetooth/cbperipheralmanageroptionrestoreidentifierkey)
+only restores state when CoreBluetooth has preserved it; a clean stop, OS reboot or CLI identity
+change may require fresh service discovery. This is not a promise that a headless process is
+relaunched by the OS. The owner starts `serve` again.
+
+BlueZ re-registers the same application paths/UUIDs on startup, advertises with no lifetime
+timeout, and retries released advertisements. Bond keys stay in BlueZ's OS store (never edited
+by this program). See [advertising lifetime](https://bluez.readthedocs.io/en/latest/advertising-api/)
+and [bond/CCC persistence](https://bluez.readthedocs.io/en/latest/settings-storage/).
+WinRT creates the same service/report UUIDs with connectable/discoverable advertising and
+restarts a stopped/aborted advertiser on the same provider. Windows keeps the bond keys;
+there is no API here to force an iPhone to reconnect or restore subscriptions without the
+central. Policy/driver rejection remains a visible error, never simulated connectivity.
+
+Keep the same host adapter, installation and `--state`. iOS decides when to initiate a bonded
+HID connection; unlock it and select the existing entry in AssistiveTouch if it does not
+reconnect. OS GATT caches/identity changes or lost bonds may still require owner re-pairing.
+Two-phone automatic reconnection remains a physical-hardware check on each OS. Safari capture
+is separate and must be approved again if it stopped.
+
+## MCP process lifetime
+
+The stdio MCP process does not depend on `serve` being available at startup. Discovery/ping
+work offline; disconnected tool calls return “Server not running — start it with:
+open-iphone-use serve”. Calls reread connection metadata, so a subsequent service startup can
+be used by the same MCP process. Invalid requests, corrupt connection metadata and tool
+exceptions return protocol errors rather than terminating the process. It exits normally when
+the client closes stdin/stdout (EOF/broken pipe). Diagnostics rotate in `<state>/mcp.log`
+(1 MiB, two backups), not stdout. The state defaults to `~/.open-iphone-use`; `--state` or
+`OIU_STATE` selects another. Restart clients after updating their registered CLI path.

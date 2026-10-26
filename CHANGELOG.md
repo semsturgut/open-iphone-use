@@ -2,6 +2,15 @@
 
 ## Unreleased — CLI-first multi-phone workflow
 
+- Install one canonical agent skill with Claude/Command Code aliases; register OpenCode
+  (preserving JSONC comments) and Command Code alongside Codex/Claude/Cursor, migrate old
+  application commands and clean stale skill copies/backups.
+- Keep stdio MCP available while the server is down, return actionable tool errors, handle
+  malformed requests/closed pipes and write rotating diagnostics outside stdout.
+- Restore macOS peripheral identity/services/per-central subscriptions when available and
+  resume connectable advertising across macOS/BlueZ/WinRT interruptions; keep OS bonds.
+  Actual automatic iPhone reconnect remains subject to OS behavior and hardware verification.
+
 - Wait for delayed, stable pointer/board frames and matching tap feedback before calibration
   clicks; extend corner homing and keep preparation independent per phone.
 - Accept recent per-device frame IDs for ordinary input; preparation takes its own frames.
