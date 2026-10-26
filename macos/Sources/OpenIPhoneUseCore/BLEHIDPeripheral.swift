@@ -418,7 +418,7 @@ extension BLEHIDPeripheral: @preconcurrency CBPeripheralManagerDelegate {
             return
         }
         peripheral.startAdvertising([
-            CBAdvertisementDataLocalNameKey: "Open iPhone Use",
+            CBAdvertisementDataLocalNameKey: ProcessInfo.processInfo.environment["OIU_DEVICE_NAME"] ?? "Open iPhone Use",
             CBAdvertisementDataServiceUUIDsKey: [Self.hidService],
         ])
     }
@@ -438,6 +438,9 @@ extension BLEHIDPeripheral: @preconcurrency CBPeripheralManagerDelegate {
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral,
                                   didSubscribeTo characteristic: CBCharacteristic) {
+        // A headless device route is permanently bound to an owner-selected central.
+        if let expected = ProcessInfo.processInfo.environment["OIU_EXPECTED_CENTRAL"],
+           central.identifier.uuidString != expected { return }
         if let id = inputReportID(for: characteristic),
            subscribedCentral == nil || subscribedCentral?.identifier == central.identifier {
             subscribedReportIDs.insert(id)

@@ -104,7 +104,7 @@ public enum ControlFrameError: Error, LocalizedError, Equatable {
 
 public enum OpenIPhoneUsePaths {
     public static var supportDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        ProcessInfo.processInfo.environment["OIU_SUPPORT_DIRECTORY"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Open iPhone Use", isDirectory: true)
     }
 

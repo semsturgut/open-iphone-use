@@ -1,20 +1,51 @@
 import AppKit
 import SwiftUI
+import WebKit
 import OpenIPhoneUseCore
 
 @main
 struct OpenIPhoneUseMacApp: App {
-    @StateObject private var controller = OpenIPhoneUseController()
+    private var serverURL: URL? {
+        guard let value = ProcessInfo.processInfo.environment["OIU_SERVER_URL"],
+              let url = URL(string: value),
+              url.scheme == "https" || (url.scheme == "http" && ["localhost", "127.0.0.1"].contains(url.host ?? "")) else { return nil }
+        return url
+    }
 
     var body: some Scene {
         WindowGroup {
-            OnboardingView(controller: controller)
-                .frame(width: 520, height: 660)
-                .background(ClawPalette.ink)
+            if let serverURL {
+                ServerClientView(url: serverURL).frame(minWidth: 700, minHeight: 660)
+            } else if ProcessInfo.processInfo.environment["OIU_SERVER_URL"] != nil {
+                Text("OIU_SERVER_URL must be an HTTPS URL or localhost HTTP URL.")
+                    .padding().frame(width: 520, height: 200)
+            } else {
+                StandaloneMacView()
+            }
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
     }
+}
+
+// The controller is created only for legacy standalone mode. Client mode starts no radio,
+// Unix broker or receiver, and uses the same authenticated grid as any LAN browser.
+private struct StandaloneMacView: View {
+    @StateObject private var controller = OpenIPhoneUseController()
+    var body: some View {
+        OnboardingView(controller: controller)
+            .frame(width: 520, height: 660).background(ClawPalette.ink)
+    }
+}
+
+private struct ServerClientView: NSViewRepresentable {
+    let url: URL
+    func makeNSView(context: Context) -> WKWebView {
+        let view = WKWebView()
+        view.load(URLRequest(url: url))
+        return view
+    }
+    func updateNSView(_ view: WKWebView, context: Context) {}
 }
 
 enum ClawPalette {

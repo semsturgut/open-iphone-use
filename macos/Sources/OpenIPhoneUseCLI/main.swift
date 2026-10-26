@@ -12,7 +12,10 @@ private enum OpenIPhoneUseCLI {
             switch command {
             case "help", "--help", "-h": printHelp()
             case "--version", "version": print("Open iPhone Use 0.0.2")
-            case "mcp": try runMCPServer()
+            case "serve", "devices", "add", "action", "token": try runPortable(args)
+            case "mcp":
+                if args.contains("--portable") { try runPortable(args.filter { $0 != "--portable" }) }
+                else { try runMCPServer() }
             case "install":
                 let cliPath = try installCLI()
                 print("Installed CLI: \(cliPath.path)")
@@ -24,7 +27,8 @@ private enum OpenIPhoneUseCLI {
             case "setup", "configure":
                 try installAgentSkill()
                 try setupClients(selection: parseSelection(Array(args.dropFirst())))
-            case "status": try showStatus()
+            case "status":
+                if args.contains("--device") { try runPortable(args) } else { try showStatus() }
             default:
                 fputs("Unknown command: \(command)\n\n", stderr)
                 printHelp()
@@ -46,6 +50,14 @@ private enum OpenIPhoneUseCLI {
           open-iphone-use setup [--opencode] [--deepseek-harness]
           open-iphone-use status
           open-iphone-use mcp
+          open-iphone-use serve [--host ADDRESS --cert PEM --key PEM]
+          open-iphone-use devices
+          open-iphone-use status --device ID
+          open-iphone-use action --device ID OPERATION --arguments JSON
+          open-iphone-use mcp --portable
+
+        Portable commands require the Python server package in OIU_SERVER_PYTHON's environment.
+        Use OIU_STATE and OIU_URL to select the server; see docs/headless-server.md.
 
         install  Adds this CLI to ~/.local/bin and connects detected agent clients.
         setup    Registers the local MCP server with OpenCode and/or DeepSeek Harness.
@@ -266,6 +278,18 @@ private enum OpenIPhoneUseCLI {
 
     private static func yamlString(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "''") + "'"
+    }
+
+    private static func runPortable(_ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [ProcessInfo.processInfo.environment["OIU_SERVER_PYTHON"] ?? "python3", "-m", "oiu.cli"] + arguments
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 { throw CLIError.serverExited(process.terminationStatus) }
     }
 
     private static func runMCPServer() throws {

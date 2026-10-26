@@ -38,7 +38,7 @@ public final class OpenIPhoneUseController: ObservableObject {
         let at: Date
     }
     var lastPointerAttempt: PointerAttempt?
-    static let pointerCalibrationKey = "OpenIPhoneUsePointerCalibration"
+    static var pointerCalibrationKey: String { "OpenIPhoneUsePointerCalibration" + (ProcessInfo.processInfo.environment["OIU_DEVICE_NAMESPACE"] ?? "") }
     /// Mouse units the pointer is wiggled by when it has to be found on screen.
     static let pointerWiggleUnits = 12
     /// A miss bigger than this is corrected before pressing.
@@ -54,7 +54,7 @@ public final class OpenIPhoneUseController: ObservableObject {
     private var activeActionTask: Task<Void, Never>?
     private let maximumFrameAgeMilliseconds = 5_000
 
-    public init() {
+    public init(headless: Bool = false) {
         receiver = LocalCaptureReceiver(frames: frames)
         receiver.onCalibrationRequest = { [weak self] force in
             guard let self else { return nil }
@@ -91,8 +91,8 @@ public final class OpenIPhoneUseController: ObservableObject {
         // Start the radio and the receiver on launch. Both are what the phone connects to, and
         // an agent cannot press a button in the app; requiring it made every restart a manual
         // step and left the phone reporting "capture paused" until someone noticed.
-        startHID()
-        startCaptureReceiver()
+        if !headless || ProcessInfo.processInfo.environment["OIU_DISABLE_BLUETOOTH"] != "1" { startHID() }
+        if !headless { startCaptureReceiver() }
     }
 
     deinit { captureWatchdog?.cancel() }
@@ -207,6 +207,39 @@ public final class OpenIPhoneUseController: ObservableObject {
     public func handle(_ request: BrokerRequest) async -> BrokerResponse {
         guard request.operation == "list_devices" || request.operation == "guide" || request.deviceID == Self.deviceID else {
             return fail(request, "Unknown device_id. Use `iphone`.")
+        }
+
+        // Only enabled in the dedicated headless helper. The app retains its original API.
+        if ProcessInfo.processInfo.environment["OIU_HEADLESS"] == "1" {
+            switch request.operation {
+            case "headless_identity":
+                return BrokerResponse(requestID: request.requestID, ok: true,
+                                      message: String(ProcessInfo.processInfo.processIdentifier))
+            case "ingest_frame":
+                guard let text = request.text, let data = Data(base64Encoded: text) else {
+                    return fail(request, "Invalid frame encoding.")
+                }
+                do {
+                    let frame = try await frames.put(jpeg: data)
+                    let controls = "{\"frameID\":\"\(frame.frameID)\",\"fps\":\(captureFramesPerSecond),\"boardEpoch\":\(receiver.boardEpoch),\"boardOpen\":\(receiver.boardOpen)}"
+                    return BrokerResponse(requestID: request.requestID, ok: true, message: controls)
+                } catch { return fail(request, "Invalid JPEG frame.") }
+            case "capture_tap":
+                if let x = request.x, let y = request.y { await frames.recordTap(x: x, y: y) }
+                return BrokerResponse(requestID: request.requestID, ok: true, message: "Tap recorded.")
+            case "capture_stop":
+                await frames.setCaptureActive(false)
+                return await handle(BrokerRequest(operation: "stop_control", deviceID: Self.deviceID))
+            default: break
+            }
+            let reads = ["guide", "list_devices", "get_device_status", "get_latest_screenshot", "stop_control"]
+            if !reads.contains(request.operation) {
+                guard let expected = ProcessInfo.processInfo.environment["OIU_EXPECTED_CENTRAL"],
+                      centralIdentifier == expected else {
+                    hid.releaseAll()
+                    return fail(request, "Pairing identity mismatch; explicitly bind the connected central before input.")
+                }
+            }
         }
 
         if request.operation == "guide" {
