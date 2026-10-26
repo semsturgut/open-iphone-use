@@ -134,10 +134,16 @@ class ServerTests(unittest.TestCase):
         instructions = handle(None, 'initialize', {})['instructions']
         self.assertIn('120 seconds', instructions)
         self.assertIn('after its last input completed', instructions)
+        self.assertIn('valid for the next action', instructions)
         screenshot = next(t for t in tools() if t['name'] == 'get_latest_screenshot')
         self.assertIn('five seconds', screenshot['description'])
         action = next(t for t in tools() if t['name'] == 'send_key')
-        self.assertIn('after its last input completed', action['inputSchema']['properties']['expected_frame_id']['description'])
+        description = action['inputSchema']['properties']['expected_frame_id']['description']
+        self.assertIn('after its last input completed', description)
+        self.assertIn('valid for the next action', description)
+        for tool in map(lambda name: next(t for t in tools() if t['name'] == name), ('ensure_session', 'prepare_session')):
+            self.assertEqual(tool['inputSchema']['properties']['return_app']['type'], 'string')
+            self.assertNotIn('return_app', tool['inputSchema']['required'])
 
     def test_frame_after_completion_and_device_independence(self):
         self.a.upload(JPEG); self.b.upload(JPEG)
@@ -169,6 +175,19 @@ class ServerTests(unittest.TestCase):
                 self.a.action('click', {'expectedFrameID': before_failure})
         with self.assertRaisesRegex(ValueError, 'before your last action'):
             self.a.action('click', {'expectedFrameID': before_failure})
+
+    def test_action_result_frame_reported_after_input_end_is_valid_for_the_next_action(self):
+        self.a.upload(JPEG)
+        ended = time.monotonic()
+        with patch.object(self.a.backend, 'request',
+                          return_value={'ok': True, 'message': 'click', 'inputEndedAt': ended}):
+            result = self.a.action('click', {'expectedFrameID': self.a.frame_id})
+        self.assertEqual(result['inputEndedAt'], ended)
+        self.a.upload(JPEG)  # Frame that arrived after the input ended.
+        self.assertTrue(self.a.action('click', {'expectedFrameID': self.a.frame_id})['ok'])
+        self.a.history.append(('before-end', ended - 30))
+        with self.assertRaisesRegex(ValueError, 'before your last action'):
+            self.a.action('click', {'expectedFrameID': 'before-end'})
 
     def test_frame_history_is_bounded(self):
         self.a.upload(JPEG); oldest = self.a.frame_id

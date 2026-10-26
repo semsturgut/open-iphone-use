@@ -96,6 +96,24 @@ class ControlTests(unittest.TestCase):
         self.assertAlmostEqual(self.engine.calibration['height'],1000,delta=5)
         self.assertEqual(self.engine.peer,'phone-a')
 
+    def test_saved_calibration_is_reused_by_a_new_control_without_preparation(self):
+        self.assertTrue(self.engine.request('ensure_session')['ok'])
+        restored=Control(self.pairing,Path(self.tmp.name)/'a',peer='phone-a')
+        self.assertTrue(restored.calibration_compatible())
+        self.assertEqual(restored.label,'Pointer ready')
+        self.radio.engines['phone-a']=restored
+        deadline=time.monotonic()+2
+        while not restored.at and time.monotonic()<deadline: time.sleep(.01)
+        try:
+            probe=restored.request('pointer_quick_probe')
+            tap=restored.request('pointer_tap',x=.5,y=.5)
+        finally: self.radio.engines['phone-a']=self.engine
+        self.assertTrue(probe['ok'],probe)
+        self.assertIn('Pointer ready',probe['message'])
+        self.assertTrue(tap['ok'],tap)
+        self.assertIn('pointer position visually verified',tap['message'])
+        self.assertAlmostEqual(self.radio.positions['phone-a'][0],300,delta=5)
+
     def test_pointer_gate_waits_for_two_stable_distinct_frames_before_clicking(self):
         self.running=False; self.thread.join(2)
         self.engine.ingest(screen(0,0))
@@ -308,6 +326,15 @@ class EncoderTests(unittest.TestCase):
         array=re.sub(r'//[^\n]*','',array)
         self.assertEqual(REPORT_MAP,bytes(int(token,16) for token in re.findall(r'0x([0-9a-fA-F]+)',array)))
         self.assertEqual(chord('cmd+h'),bytes([8,0,11,0,0,0,0,0]))
+        self.assertEqual(chord('return'),chord('enter'))
+        self.assertEqual(chord('Return'),chord('enter'))
+        self.assertEqual(chord('esC'),chord('escape'))
+        self.assertEqual(chord('cmd+Return'),bytes([8,0,0x28,0,0,0,0,0]))
+        self.assertEqual(chord('ret'),chord('enter'))
+        self.assertEqual(chord('pgdn'),chord('pagedown'))
+        self.assertEqual(chord('arrowup'),chord('up'))
+        self.assertEqual(chord('home'),bytes([0,0,0x4a,0,0,0,0,0]))
+        with self.assertRaisesRegex(ValueError,'Accepted'):chord('banana')
         self.assertEqual(stroke('!'),(2,0x1e))
         self.assertEqual(mouse(-127,127),bytes([0,129,127,0]))
         with self.assertRaises(ValueError): mouse(128)

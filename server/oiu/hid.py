@@ -53,12 +53,15 @@ def chord(value):
         modifier |= modifiers[part]
     keys = dict(enter=0x28, tab=0x2b, escape=0x29, backspace=0x2a, delete=0x4c, space=0x2c,
                 up=0x52, down=0x51, left=0x50, right=0x4f, home=0x4a, end=0x4d, pageup=0x4b, pagedown=0x4e)
-    key = parts[-1]
+    alias = {'return': 'enter', 'ret': 'enter', 'esc': 'escape', 'escape': 'escape', 'del': 'delete', 'bksp': 'backspace',
+             'spacebar': 'space', 'pgup': 'pageup', 'pgdn': 'pagedown', 'arrowup': 'up', 'arrowdown': 'down',
+             'arrowleft': 'left', 'arrowright': 'right'}
+    key = alias.get(parts[-1], parts[-1])
     if key in keys: return keyboard(modifier, keys[key])
     if len(key) == 1:
         extra, usage = stroke(key)
         return keyboard(modifier | extra, usage)
-    raise ValueError(f'Unknown key: {key}')
+    raise ValueError(f'Unknown key: {key}. Accepted: return/enter, tab, esc/escape, del/delete, bksp/backspace, space, pgup/pageup, pgdn/pagedown, up/down/left/right, arrowup/arrowdown/arrowleft/arrowright, cmd/ctrl/shift/alt/cmd+<key>, or a single character')
 
 
 def fraction(value):

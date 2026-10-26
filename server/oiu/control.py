@@ -14,6 +14,12 @@ from . import vision
 from . import calibration as mapping
 
 
+VERIFY_BUDGET = 2.0
+# A feed drag only needs a roughly centered start and ~40% of the screen height
+# of travel; these gains mirror the calibration test fixtures for a known screen.
+DRAG_FALLBACK = dict(width=600, height=1000, offset_x=0, offset_y=0)
+
+
 def atomic_json(path, value):
     temporary = path.with_suffix('.tmp')
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -211,36 +217,52 @@ class Control:
         return (*observation[:2],pressed) if observation else None
 
     def click_current(self, button='left'):
-        # A round UI icon is not enough evidence for an unlocated click. Verify that a
-        # small rightward motion moves the candidate, return to its observed position,
-        # and require a settled frame before pressing.
-        point,_,_=self.wait_pointer(time.monotonic(),board_required=False)
-        with self.condition: before=self.jpeg
-        self.move(8,0)
-        shifted,_,_=self.wait_pointer(self.motion_at,expected=point,board_required=False,
-                                     tolerance=.18,reference=before)
-        if shifted[0]-point[0]<.003 or abs(shifted[1]-point[1])>.02:
-            raise ValueError('Could not verify pointer movement; no click was sent')
-        with self.condition: moved=self.jpeg
-        self.move(-8,0)
-        self.wait_pointer(self.motion_at,expected=point,board_required=False,reference=moved)
+        # Locate the pointer only to report where the click lands; screen sharing
+        # lags and video apps hide the pointer, so never refuse a click here.
+        point=None
+        try: point,_,_=self.wait_pointer(time.monotonic(),board_required=False,timeout=1)
+        except ValueError: pass
         self.click(button)
+        return point
+
+    def drag_calibration(self):
+        """Drags tolerate imprecision: any stored mapping beats desktop-scale defaults."""
+        if self.calibration: return self.calibration
+        if self.path.exists():
+            try: saved=json.loads(self.path.read_text())
+            except (OSError,ValueError): saved={}
+            if saved.get('peer')==self.peer and isinstance(saved.get('calibration'),dict):
+                return saved['calibration']
+        return DRAG_FALLBACK
+
+    def spotlight(self, name):
+        # Bring an app to the front through Spotlight typing (cmd+space, name, enter).
+        payload=chord('cmd+space')
+        self.packet(1,payload); time.sleep(.024); self.packet(1,keyboard()); time.sleep(.6)
+        for character in name:
+            modifier,usage=stroke(character)
+            self.packet(1,keyboard(modifier,usage)); time.sleep(.024); self.packet(1,keyboard()); time.sleep(.024)
+        modifier,usage=stroke('\n')
+        self.packet(1,keyboard(modifier,usage)); time.sleep(.024); self.packet(1,keyboard()); time.sleep(.5)
+
+    def open_calibration_board(self):
+        """Open the board and wait for it; pull the Safari sharing tab forward if absent."""
+        self.open_board(True)
+        try: self.wait_board(timeout=3)
+        except ValueError:
+            self.fresh()
+            self.spotlight('Safari')
+        for attempt in range(2):
+            try: return self.wait_board()
+            except ValueError:
+                self.fresh()
+                if attempt: raise
+                self.open_board(True)
 
     def calibrate(self):
-        self.calibration=None
-        self.open_board(True)
+        candidate=None
         try:
-            # Invalidate a previously persisted fit before any new preparation.
-            self.save()
-            # One bounded board retry; frames and owner pairing must stay fresh throughout.
-            for attempt in range(2):
-                try:
-                    rect=self.wait_board()
-                    break
-                except ValueError:
-                    self.fresh()
-                    if attempt: raise
-                    self.open_board(True)
+            rect=self.open_calibration_board()
             initial=vision.image(self.jpeg)
             aspect=initial.width/initial.height
             samples=[]
@@ -276,14 +298,17 @@ class Control:
                 target=(rect[0]+x*rect[2],rect[1]+y*rect[3])
                 ux,uy=(round((target[a]-offsets[a])*spans[a]) for a in (0,1))
                 measure(ux,uy,target)
-            self.calibration=mapping.fit(samples,aspect)
+            candidate=mapping.fit(samples,aspect)
             # A separate held-out target must converge too; a fitted line alone is not proof.
             target=(rect[0]+.5*rect[2],rect[1]+.38*rect[3])
-            self.absolute(*target)
-            self.save()
+            _,verified=self.absolute(*target,calibration=candidate)
+            if not verified: raise ValueError('the held-out calibration target did not land within 1% of the screen; check that the green-bordered board is fully visible and AssistiveTouch tracking speed/Zoom are unchanged')
         except (ValueError,OSError) as error:
-            self.calibration=None
-            raise ValueError('Calibration failed; no mapping was saved. Keep Safari sharing visible, use the standard grey AssistiveTouch pointer, keep tracking speed/Zoom fixed, and prepare again. '+str(error)) from error
+            # An in-flight attempt never destroys a previously stored mapping.
+            raise ValueError('Calibration failed; the stored mapping is untouched. Keep Safari sharing visible, use the standard grey AssistiveTouch pointer, keep tracking speed/Zoom fixed, and prepare again. '+str(error)) from error
+        else:
+            self.calibration=candidate
+            self.save()
         finally:
             self.open_board(False)
 
@@ -295,31 +320,35 @@ class Control:
                 self.calibration=None
         if not self.calibration: self.calibrate()
 
-    def absolute(self,x,y):
+    def absolute(self,x,y,calibration=None):
+        """Open-loop calibrated move; visual verification is bounded and best-effort."""
         x,y=fraction(x),fraction(y)
-        if not self.calibration_compatible(): raise ValueError('Run ensure_session with Safari sharing visible before coordinate input; this calibration is missing or uses an older motion profile')
+        c=calibration or self.calibration
+        if c is None or c.get('version')!=mapping.VERSION or c.get('motion')!=mapping.MOTION:
+            raise ValueError('Pointer calibration is missing or incompatible; run ensure_session with Safari sharing visible to calibrate, then retry')
         if self.peer not in [p['id'] for p in self.radio.peers() if set(p['reports'])=={1,2}]: raise ValueError('Paired iPhone disconnected')
         pic=vision.image(self.jpeg)
-        if abs(pic.width/pic.height-self.calibration['aspect'])>.03: raise ValueError('Screen orientation changed; prepare the pointer again')
-        c=self.calibration
+        if abs(pic.width/pic.height-c['aspect'])>.03: raise ValueError('Screen orientation changed; prepare the pointer again')
         ux,uy=round((x-c['offset_x'])*c['width']),round((y-c['offset_y'])*c['height'])
         self.home()
-        # Capture the parked pointer before moving; screen sharing can lag HID by a second.
-        # A target-shaped icon that existed before this move is not evidence of the pointer.
-        _,reference=self.capture_after(self.motion_at+1.1,timeout=4)
+        deadline=time.monotonic()+VERIFY_BUDGET
+        try: stamp,reference=self.capture_after(time.monotonic(),timeout=max(.001,deadline-time.monotonic()))
+        except ValueError: stamp,reference=time.monotonic(),None
         self.move(ux,uy)
-        for attempt in range(4):
-            point,_,_=self.wait_pointer(self.motion_at,expected=(x,y),board_required=False,tolerance=.18,reference=reference)
-            if math.dist(point,(x,y))<=mapping.TOLERANCE:
-                self.target_reference=reference
-                return point
-            if attempt==3: break
-            # Bounded visual correction, never a blind click or permanent calibration update.
-            dx,dy=round((x-point[0])*c['width']),round((y-point[1])*c['height'])
-            if dx==dy==0: break
-            with self.condition: reference=self.jpeg
-            self.move(dx,dy)
-        raise ValueError('Pointer did not reach the requested target within 1% of the screen after three visual corrections; no click was sent. Recalibrate and check AssistiveTouch tracking speed/Zoom')
+        point=None
+        try:
+            point,_,_=self.wait_pointer(stamp,expected=(x,y),board_required=False,tolerance=.18,
+                                        timeout=max(.001,deadline-time.monotonic()),reference=reference)
+            for _ in range(2):
+                if math.dist(point,(x,y))<=mapping.TOLERANCE: return point,True
+                if time.monotonic()>=deadline: break
+                dx,dy=round((x-point[0])*c['width']),round((y-point[1])*c['height'])
+                if dx==dy==0: break
+                self.move(dx,dy)
+                point,_,_=self.wait_pointer(self.motion_at,expected=(x,y),board_required=False,tolerance=.18,
+                                            timeout=max(.001,deadline-time.monotonic()))
+        except ValueError: pass  # Pointer invisible or verification budget spent; keep the open-loop landing spot.
+        return point, bool(point and math.dist(point,(x,y))<=mapping.TOLERANCE)
 
     def stop_capture(self):
         self.generation+=1
@@ -382,8 +411,18 @@ class Control:
         try:
             self.fresh()
             self.pairing.associate(self)
-            if operation in ('prepare_session','pointer_quick_probe'): self.calibration=None
-            if operation in ('ensure_session','prepare_session','pointer_quick_probe'): self.ready()
+            message=None
+            if operation in ('ensure_session','prepare_session','pointer_quick_probe'):
+                return_app=args.get('return_app')
+                if return_app is not None:
+                    if not isinstance(return_app,str) or not 1<=len(return_app.encode())<=80:
+                        raise ValueError('return_app must be an app name of at most 80 ASCII bytes')
+                    [stroke(c) for c in return_app]  # Validate before touching the phone.
+            if operation=='pointer_quick_probe':
+                message='Pointer ready; calibration is reused automatically' if self.calibration_compatible() else 'Pointer not calibrated; run ensure_session on the Safari sharing tab to calibrate'
+            elif operation in ('ensure_session','prepare_session'):
+                self.ready()
+                if return_app is not None: self.spotlight(return_app)
             elif operation=='set_page_board':
                 self.open_board(bool(args.get('aim')))
                 if args.get('aim'): self.wait_board()
@@ -392,11 +431,23 @@ class Control:
                 dx,dy=args.get('dx',0),args.get('dy',0)
                 if type(dx) is not int or type(dy) is not int or max(abs(dx),abs(dy))>127: raise ValueError('Relative deltas must be -127…127')
                 self.move(dx,dy)
-                self.wait_pointer(self.motion_at,board_required=False)
-            elif operation=='click': self.click_current(args.get('button','left'))
+                try: point,_,_=self.wait_pointer(self.motion_at,board_required=False,timeout=1)
+                except ValueError: point=None
+                message='Pointer moved to (%.3f,%.3f)'%point if point else 'Pointer moved; the pointer was not visible to verify'
+            elif operation=='click':
+                point=self.click_current(args.get('button','left'))
+                message='Clicked at (%.3f,%.3f)'%point if point else 'Clicked at the current pointer; the pointer was not visible to verify'
             elif operation in ('pointer_move','pointer_tap'):
-                self.absolute(args['x'],args['y'])
-                if operation=='pointer_tap': self.click(gated=True,after=self.motion_at,expected=(args['x'],args['y']),board_required=False,reference=self.target_reference)
+                point,verified=self.absolute(args['x'],args['y'])
+                target='(%s,%s)'%(args['x'],args['y'])
+                if operation=='pointer_tap':
+                    self.click()
+                    if verified: message='Tapped at '+target+'; pointer position visually verified'
+                    elif point is None: message='Tapped at '+target+' using calibration only; pointer was not visible to verify'
+                    else: message='Tapped at '+target+'; pointer read (%.3f,%.3f) and was not within 1%% of the target'%point
+                elif verified: message='Pointer is at '+target+'; position visually verified'
+                elif point is None: message='Pointer moved using calibration only; the pointer was not visible to verify'
+                else: message='Pointer read (%.3f,%.3f) near the target; position not verified'%point
             elif operation=='type_text':
                 text=args['text']
                 if not isinstance(text,str) or len(text.encode())>500: raise ValueError('Text must contain at most 500 ASCII bytes')
@@ -418,10 +469,17 @@ class Control:
                 if operation=='advance_feed' and args.get('dy',1) not in (-1,1): raise ValueError('Feed dy must be 1 or -1')
                 start={'up':(.5,.7),'down':(.5,.3),'left':(.75,.5),'right':(.25,.5)}[direction]
                 end={'up':(.5,.3),'down':(.5,.7),'left':(.25,.5),'right':(.75,.5)}[direction]
-                self.absolute(*start)
+                # Drags never wait for the pointer to be found on screen: press, drag and
+                # release open-loop. A stored mapping (even an older profile, reloaded
+                # from disk) is used when present, otherwise conservative fixture-scale
+                # gains apply.
+                c=self.drag_calibration()
+                self.home()
+                self.move(round((start[0]-c['offset_x'])*c['width']),round((start[1]-c['offset_y'])*c['height']))
                 self.packet(2,mouse(buttons=1)); time.sleep(.05)
-                self.move(round((end[0]-start[0])*self.calibration['width']),round((end[1]-start[1])*self.calibration['height']),buttons=1)
+                self.move(round((end[0]-start[0])*c['width']),round((end[1]-start[1])*c['height']),buttons=1)
                 self.packet(2,mouse())
+                message='Dragged '+direction+(', always verify the next item in the returned frame' if operation=='advance_feed' else '')
             else: raise ValueError('Unknown control operation')
             ended=time.monotonic()
             if operation!='set_page_board': self.wait_frame(ended)
@@ -434,7 +492,8 @@ class Control:
             self.error=None
             with self.condition:
                 jpeg,frame_id,frame_at=self.jpeg,self.frame_id,self.at
-            return dict(ok=True,message='Input/preparation completed. Inspect the returned screen to verify the UI outcome.',commandID=str(uuid.uuid4()),
+            return dict(ok=True,message=message or 'Input/preparation completed. Inspect the returned screen to verify the UI outcome.',inputEndedAt=ended,
+                        commandID=str(uuid.uuid4()),
                         frame=dict(frameID=frame_id,captureActive=self.is_fresh(),ageMilliseconds=int((time.monotonic()-frame_at)*1000),
                                    mimeType='image/jpeg',base64=base64.b64encode(jpeg).decode()))
         except (ValueError,OSError) as error:

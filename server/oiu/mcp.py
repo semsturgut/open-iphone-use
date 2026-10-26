@@ -18,6 +18,7 @@ PARAMETERS = {
     "pointer_tap": {"x": "number", "y": "number"}, "pointer_move": {"x": "number", "y": "number"},
     "swipe": {"profile": "string"}, "advance_feed": {"dy": "integer"},
     "set_page_board": {"aim": "boolean"},
+    "ensure_session": {"return_app": "string"}, "prepare_session": {"return_app": "string"},
 }
 
 
@@ -27,14 +28,18 @@ def tools():
         props = {} if name in ("list_devices", "list_bluetooth_candidates") else {"device_id": {"type": "string"}}
         if name == 'create_device': props = {'bt_id': {'type': 'string'}}
         if name in ACTIONS:
-            props["expected_frame_id"] = {"type": "string", "description": "ID of a screenshot from this device captured after its last input completed and no more than 120 seconds ago. Call get_latest_screenshot after each input."}
+            props["expected_frame_id"] = {"type": "string", "description": "ID of a screenshot from this device after its last input completed, at most 120 seconds old. The frameID that an action's own result returns is valid for the next action, so a new get_latest_screenshot per action is not needed; a frame captured before the last input completed is rejected."}
             props.update({key: {"type": kind} for key, kind in PARAMETERS.get(name, {}).items()})
+        optional = {'expected_frame_id'} if name in PREPARATION else set()
+        if name in ('ensure_session', 'prepare_session'): optional.add('return_app')
         result.append(dict(name=name, description=f"{name.replace('_', ' ')}. Choose a device explicitly; inspect each resulting screen. HID acceptance does not prove UI success.",
-                           inputSchema=dict(type="object", properties=props, required=[p for p in props if not (p=="expected_frame_id" and name in PREPARATION)], additionalProperties=False)))
+                           inputSchema=dict(type="object", properties=props, required=[p for p in props if p not in optional], additionalProperties=False)))
         if name == 'scroll':
             result[-1]['description'] = 'Send raw HID wheel ticks. Positive dy moves content up/advances on iOS, matching native macOS. App sensitivity varies; use modest values and verify reel identity, not video animation or ok:true.'
         if name == 'advance_feed':
-            result[-1]['description'] = 'Advance to the NEXT item with dy=1 (upward drag); dy=-1 returns to the previous item. Pointer targeting must settle before pressing. Inspect creator/title afterward; HID acceptance is not a transition count.'
+            result[-1]['description'] = 'Advance to the NEXT item with dy=1 (upward drag); dy=-1 returns to the previous item. Presses, drags and releases open-loop with calibration (or a compatible fallback) and never wait for the pointer to be visible, so it works over video apps. Inspect creator/title afterward; HID acceptance is not a transition count.'
+        if name in ('ensure_session', 'prepare_session'):
+            result[-1]['description'] = 'Prepare the pointer: a compatible calibration is reused as-is; without one the Safari sharing tab is brought to the front and calibrated. Optional return_app reopens that app via Spotlight after preparation. Errors tell exactly what the owner must do.'
         if name == 'get_latest_screenshot':
             result[-1]['description'] = 'Read the selected phone screenshot and frame age. For input use an ID captured after this device’s last input completed, at most 120 seconds old. Screen sharing must still be active (latest frame within five seconds).'
         if name == 'create_device':
@@ -53,7 +58,7 @@ def handle(args, method, params):
         version = requested if requested in ("2024-11-05", "2025-03-26", "2025-06-18") else "2024-11-05"
         return dict(protocolVersion=version, capabilities={"tools": {}},
                     serverInfo={"name": "open-iphone-use-portable", "version": "0.1.0"},
-                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old; call get_latest_screenshot after every action, including preparation. Screen sharing must remain active with a frame in the last five seconds. Red Bluetooth/screen sharing status means control will not work. Owner pairing/sharing/unlocking is required.")
+                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary; a frame captured before the last input completed is rejected. Screen sharing must remain active with a frame in the last five seconds. Red Bluetooth/screen sharing status means control will not work. Owner pairing/sharing/unlocking is required.")
     if method == "ping":
         return {}
     if method == "tools/list":

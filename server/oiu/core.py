@@ -116,10 +116,18 @@ class Device:
                     result = self.backend.request(operation, **arguments)
                     if not result.get("ok"):
                         self.backend.request("stop_control")
+                        with self.lock:
+                            self.last_input_completed_at = time.monotonic()
+                    else:
+                        with self.lock:
+                            # The backend reports when the HID input actually ended;
+                            # frames captured after that moment are valid for the next action.
+                            self.last_input_completed_at = result.get("inputEndedAt") if isinstance(result.get("inputEndedAt"), float) else time.monotonic()
                     return result
-                finally:
+                except (OSError, ValueError):
                     with self.lock:
                         self.last_input_completed_at = time.monotonic()
+                    raise
         except (OSError, ValueError):
             self.backend.request("stop_control")
             raise
