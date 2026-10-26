@@ -91,3 +91,11 @@ open-iphone-use register-agents --skill /path/to/macos/Resources/open-iphone-use
 
 Reference schemas: [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
 [Cursor MCP](https://cursor.com/docs/mcp), [Claude Code MCP](https://code.claude.com/docs/en/mcp).
+
+
+After installation, `open-iphone-use serve` detaches by default and prints a short status,
+the loopback Web UI and private log path. Open that Web UI directly, without a token.
+Use `serve --foreground` to debug Bluetooth permissions and `stop` to shut down. Pair via
+AssistiveTouch, use `new` (or select a Bluetooth peer in the UI), scan that phone's QR,
+then approve Safari sharing. `devices`, `status --device`, `link` and `remove` work without
+a host browser. Distribution builds use these setup scripts and the CLI only.

@@ -1,11 +1,11 @@
 ## Portable server preview
 
-The new headless path has a separate operator credential and per-device capture tokens,
+The new headless path uses loopback-only operator access and per-device capture tokens,
 owner-private state, bounded frame uploads/queues, origin checks and mandatory TLS for
 LAN listeners. Capture tokens cannot issue arbitrary input; they can upload their own frames/feedback, stop their stream, and explicitly request board-gated pointer preparation from the Safari calibration button. A live Bluetooth HID peer must be selected before a device/link can be created. Its exact
 peer ID is persisted; names are labels, never identity selectors. Generic invitation
-enrollment is disabled. Operator-authenticated removal revokes that capture token and
-cancels only that device; authenticated shutdown stops the background service. Never publish capture links or state/backend config files.
+enrollment is disabled. Loopback-only removal revokes that capture token and
+cancels only that device; loopback shutdown stops the background service. Never publish capture links or state/backend config files.
 See [headless server security and platform limitations](docs/headless-server.md).
 The standard-library server is for a trusted private LAN/localhost, without internet-grade
 authentication or audit controls. Linux/Windows HID is implemented but not yet hardware-verified; OS policies and physical multi-phone radio behavior require validation. The generated CA is never automatically trusted: verify its fingerprint or transfer it over an authenticated channel before owner approval. The localhost operator listener is loopback-only; the separate plaintext bootstrap serves public certificate bytes only. Windows state receives an owner/SYSTEM ACL. Installer backups are private and uninstall preserves user-edited registrations.
@@ -40,3 +40,13 @@ trust, screen sharing and unlocking belong to the owner.
 Do not publish private screenshots, tokens or keys in issues. Use GitHub private
 vulnerability reporting if available, or arrange a private channel with the repository
 owner before sending exploit details.
+
+
+## Loopback operator trust
+
+The Web UI and operator API bind to loopback and do not require a token. Requests must
+come from a loopback client with a loopback Host and matching browser Origin. Cross-site
+requests and LAN-listener operator routes are rejected, including requests carrying old
+operator credentials. Any local process that can reach the loopback port can control the
+server; forwarding it through a proxy would cross this trust boundary and is unsupported.
+Phone capture pages/uploads remain scoped by independent private capture tokens.

@@ -7,7 +7,7 @@ native radio and the optional native app. Linux and Windows use real OS peripher
 ```mermaid
 flowchart LR
     I[Many owner-approved iPhone shares] -->|Per-device HTTPS credentials| P[Python service]
-    U[Localhost / LAN operator grid] -->|Operator token| P
+    U[Loopback operator grid] -->|Local client and Host/Origin checks| P
     A[MCP client] --> C[Portable stdio CLI]
     C --> P
     P --> D[Device registry / frames / queues / calibration]
@@ -38,9 +38,9 @@ phone. Unbound legacy records cannot emit input. Calibration clicks require a me
 board and visible pointer; HID acceptance does not establish the resulting UI behavior.
 
 TLS capture and the operator grid are separate listener roles: LAN HTTPS serves capture
-and authenticated APIs, a loopback HTTP listener avoids desktop certificate installation,
-and an HTTP bootstrap endpoint serves only public CA bytes. The private operator token
-and capture tokens have distinct permissions; old generic enrollment is disabled. CLI/MCP discover the loopback
+and scoped capture APIs, a loopback HTTP listener avoids desktop certificate installation,
+and an HTTP bootstrap endpoint serves only public CA bytes. Operator access is trusted only on the loopback listener with local clients and Host/Origin
+checks. The LAN listener accepts per-device capture tokens, never operator requests. CLI/MCP discover the loopback
 connection from private state rather than requiring manual URL/CA configuration.
 
 ## Native service details
@@ -58,10 +58,11 @@ All three implementations exist. Linux/Windows and the new physical multi-phone 
 path are not yet hardware-verified. Radio/OS limits are operational constraints, not
 features that software can promise away. [Platform setup](headless-server.md).
 
-## Optional Mac app and compatibility
 
-`OIU_SERVER_URL=http://127.0.0.1:27893` makes the SwiftUI app display the same grid through
-WKWebView, starting no local controller/radio/receiver. Without the variable it preserves
-the original single-phone app, HTTPS receiver/local CA, Unix broker and Swift MCP helper.
-Its build/DMG scripts retain their paths and resources. The new setup scripts build the
-CLI-native helper separately and do not create or modify distribution artifacts.
+## CLI-only distribution
+
+setup.sh/setup.ps1 install the Python CLI and platform-native HID implementation; macOS
+builds the headless Swift helper. There is no application-bundle/disk-image build path.
+The legacy Swift stdio helper remains for protocol compatibility tests. Session preparation
+uses its own delayed-frame observations; other input uses a bounded two-second frame-ID
+ring. Image waits and control queues are per device.

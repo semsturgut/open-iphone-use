@@ -24,8 +24,7 @@ To exercise installed CLI startup with automatic HTTPS and the real host radio (
 sending physical input), build/copy the helper into the test environment and run:
 
 ```sh
-swift build --package-path macos -c release
-cp macos/.build/release/open-iphone-use-headless .venv/bin/open-iphone-use-headless
+sh setup.sh --no-agents  # use temporary install/bin roots for isolated installer checks
 .venv/bin/python server/tests/serve_smoke.py .venv/bin/open-iphone-use
 ```
 
@@ -45,9 +44,8 @@ PYTHONPATH=server python3 server/tests/native_smoke.py macos/.build/release/open
 ```sh
 cd macos
 swift test
-swift build -c release
 node scripts/test-capture-page.mjs
-python3 scripts/test-agent-mcp.py .build/release/open-iphone-use-mcp
+python3 scripts/test-agent-mcp.py .build/debug/open-iphone-use-mcp
 ```
 
 ## Historical iPhone capture checks (only when an ios/ tree is present)

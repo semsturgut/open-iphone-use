@@ -62,3 +62,6 @@ See [headless server setup and platform status](docs/headless-server.md).
 
 Version 0.0.1 is an experimental, non-notarized development build. No cross-device compatibility guarantee,
 public release, auto-unlock or automatic system-permission approval is claimed.
+
+- [x] CLI-only distribution; default background server and tokenless loopback operator UI.
+- [x] Delayed-frame-safe calibration, recent per-device frame IDs and live connection lights.
