@@ -5,7 +5,7 @@ Uses PyWinRT's native projections rather than a simulated or BLE-central impleme
 """
 import asyncio
 import uuid as uuids
-from winrt.windows.devices.bluetooth import BluetoothAdapter, BluetoothError
+from winrt.windows.devices.bluetooth import BluetoothAdapter, BluetoothError, BluetoothLEDevice
 from winrt.windows.devices.bluetooth.genericattributeprofile import (
     GattServiceProvider, GattLocalCharacteristicParameters, GattLocalDescriptorParameters,
     GattCharacteristicProperties, GattProtectionLevel, GattServiceProviderAdvertisingParameters,
@@ -31,9 +31,12 @@ class WindowsRadio(AsyncRadio):
         self.provider = None
         self.reports = {}
         self.values = {}
+        self.report_values = {}
         self.events = []
         self.error = None
         self.tasks = set()
+        self.peer_names = {}
+        self.name_pending = set()
         super().__init__()
 
     def _run_loop(self):
@@ -74,6 +77,7 @@ class WindowsRadio(AsyncRadio):
                     self.reports[report] = char
                     self.values[id(char)] = bytes(8 if report == 1 else 4)
                     self.events.append((char, 'read_requested', char.add_read_requested(self._read)))
+                    self.events.append((char, 'subscribed_clients_changed', char.add_subscribed_clients_changed(self._subscribers)))
                     params = GattLocalDescriptorParameters()
                     params.read_protection_level = GattProtectionLevel.ENCRYPTION_REQUIRED
                     params.static_value = buffer(bytes([report, 1]))
@@ -115,10 +119,22 @@ class WindowsRadio(AsyncRadio):
         async def respond():
             request = await args.get_request_async()
             if request is None: return
-            value = self.values.get(id(sender), bytes(8 if sender == self.reports.get(1) else 4))
+            report = next((r for r, char in self.reports.items() if char == sender), None)
+            if report:
+                peer = args.session.device_id.id
+                value = self.report_values.get((peer, report), bytes(8 if report == 1 else 4))
+            else: value = self.values.get(id(sender), b'\1')
             if request.offset > len(value): request.respond_with_protocol_error(0x07)
             else: request.respond_with_value(buffer(value[request.offset:]))
         self._event(respond(), deferral)
+
+    def _subscribers(self, sender, args):
+        def reset():
+            report = next((r for r, char in self.reports.items() if char == sender), None)
+            connected = {c.session.device_id.id for c in sender.subscribed_clients}
+            for key in list(self.report_values):
+                if key[1] == report and key[0] not in connected: self.report_values.pop(key, None)
+        self.loop.call_soon_threadsafe(reset)
 
     def _write(self, sender, args):
         deferral = args.get_deferral()
@@ -146,7 +162,27 @@ class WindowsRadio(AsyncRadio):
             for client in char.subscribed_clients:
                 peer = client.session.device_id.id
                 peers.setdefault(peer, []).append(report)
-        return [{'id': peer, 'reports': sorted(reports)} for peer, reports in peers.items()]
+        result = []
+        for peer, reports in peers.items():
+            name = self.peer_names.get(peer)
+            if not name and peer not in self.name_pending:
+                self.name_pending.add(peer)
+                task = asyncio.create_task(self._resolve_name(peer))
+                self.tasks.add(task); task.add_done_callback(self.tasks.discard)
+            result.append({'id': peer, 'reports': sorted(reports), 'name': name or f'iPhone ({peer[-4:]})',
+                           'name_source': 'winrt-device-name' if name else 'fallback'})
+        return result
+
+    async def _resolve_name(self, peer):
+        device = None
+        try:
+            device = await asyncio.wait_for(BluetoothLEDevice.from_id_async(peer), 1)
+            name = (device.name or device.device_information.name) if device else None
+            if name: self.peer_names[peer] = name
+        except (OSError, asyncio.TimeoutError): pass
+        finally:
+            self.name_pending.discard(peer)
+            if device: device.close()
 
     async def notify(self, peer, report, payload):
         if (report, len(payload)) not in ((1, 8), (2, 4)): raise ValueError('Invalid HID payload')
@@ -158,8 +194,11 @@ class WindowsRadio(AsyncRadio):
         result = await char.notify_value_async(buffer(payload), client)
         if result.status != GattCommunicationStatus.SUCCESS:
             raise OSError(f'Windows targeted HID notification failed: {result.status}')
+        self.report_values[(peer, report)] = bytes(payload)
 
     async def shutdown(self):
+        for task in list(self.tasks): task.cancel()
+        if self.tasks: await asyncio.gather(*self.tasks, return_exceptions=True)
         if self.provider: self.provider.stop_advertising()
         for obj, event, token in reversed(self.events):
             getattr(obj, 'remove_' + event)(token)

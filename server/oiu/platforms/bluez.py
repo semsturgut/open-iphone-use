@@ -58,6 +58,7 @@ class Characteristic(ServiceInterface):
         self.path = service.path + '/char' + str(index)
         self.flags, self.value, self.report = flags, value, report
         self.notifying = False
+        self.peer_values = {}
         self.channels = {}  # central Device1 path -> connected SOCK_SEQPACKET socket
     @dbus_property(access=PropertyAccess.READ)
     def UUID(self) -> 's': return uuid(self.short)
@@ -74,9 +75,10 @@ class Characteristic(ServiceInterface):
     @method()
     def ReadValue(self, options: 'a{sv}') -> 'ay':
         if 'device' in options: self.owner.seen_peers.add(options['device'].value)
+        value = self.peer_values.get(options['device'].value if 'device' in options else '', bytes(8 if self.report == 1 else 4)) if self.report else self.value
         offset = options.get('offset', Variant('q', 0)).value
-        if offset > len(self.value): raise DBusError('org.bluez.Error.InvalidOffset', 'HID read offset')
-        return self.value[offset:]
+        if offset > len(value): raise DBusError('org.bluez.Error.InvalidOffset', 'HID read offset')
+        return value[offset:]
     @method()
     def WriteValue(self, value: 'ay', options: 'a{sv}'):
         if options.get('offset', Variant('q', 0)).value != 0:
@@ -114,6 +116,7 @@ class Characteristic(ServiceInterface):
             if not packet:
                 self.owner.loop.remove_reader(local.fileno())
                 self.channels.pop(peer, None)
+                self.peer_values.pop(peer, None)
                 local.close()
         self.owner.loop.add_reader(local.fileno(), disconnected)
         # The high-level dbus-fast service serializes a real FD and duplicates it via SCM_RIGHTS.
@@ -214,6 +217,9 @@ class BlueZRadio(AsyncRadio):
 
     async def connected(self):
         objects = await self.manager.call_get_managed_objects()
+        self.peer_names = {path: (values['org.bluez.Device1'].get('Name') or values['org.bluez.Device1'].get('Alias')).value
+                           for path, values in objects.items() if 'org.bluez.Device1' in values
+                           and (values['org.bluez.Device1'].get('Name') or values['org.bluez.Device1'].get('Alias'))}
         return [path for path, values in objects.items() if 'org.bluez.Device1' in values
                 and values['org.bluez.Device1'].get('Connected', Variant('b', False)).value
                 and values['org.bluez.Device1'].get('Paired', Variant('b', False)).value]
@@ -225,7 +231,10 @@ class BlueZRadio(AsyncRadio):
             adapter = peer.split('/dev_')[0]
             reports = [r for r in (1, 2) if (adapter, r) in self.reports and
                        (peer in self.reports[(adapter, r)].channels or self.reports[(adapter, r)].notifying)]
-            if reports: result.append({'id': peer, 'reports': reports})
+            if reports:
+                name = getattr(self, 'peer_names', {}).get(peer)
+                result.append({'id': peer, 'reports': reports, 'name': name or f'iPhone ({peer[-4:]})',
+                               'name_source': 'bluez-device-name' if name else 'fallback'})
         return result
 
     async def notify(self, peer, report, payload):
@@ -249,6 +258,7 @@ class BlueZRadio(AsyncRadio):
                 raise OSError('This BlueZ version uses shared notifications: use one paired phone per BLE adapter, or a BlueZ build supporting per-device AcquireNotify; refusing broadcast')
             char.value = payload
             char.emit_properties_changed({'Value': payload})
+        char.peer_values[peer] = bytes(payload)
 
     async def shutdown(self):
         for char in self.reports.values():

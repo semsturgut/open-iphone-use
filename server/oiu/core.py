@@ -34,6 +34,10 @@ class Device:
     slots: object = field(default_factory=lambda: threading.BoundedSemaphore(16))
     epoch: int = 0
     removed: bool = False
+    bt_id: str | None = None
+    bluetooth_connected: bool = False
+    bluetooth_error: str = ""
+    name_source: str = "fallback"
 
     def require_present(self):
         if self.removed:
@@ -44,7 +48,9 @@ class Device:
             age = int((time.monotonic() - self.at) * 1000) if self.at else None
             return dict(device_id=self.id, name=self.name, frame_id=self.frame_id,
                         age_ms=age, capture_active=self.active and age is not None and age <= 5000,
-                        hid=type(self.backend).__name__,
+                        hid=type(self.backend).__name__, bt_id=self.bt_id,
+                        bluetooth_connected=self.bluetooth_connected, bluetooth_error=self.bluetooth_error,
+                        name_source=self.name_source, sharing_active=self.active and age is not None and age <= 5000,
                         control_status=getattr(self.backend, "label", "Control configured"))
 
     def upload(self, jpeg):
@@ -110,12 +116,14 @@ class Registry:
         self.admin_token = saved["admin_token"]
         self.invite_token = saved.get("invite_token", secrets.token_hex(32))
         self.backend_factory = None
+        self.radio = None
+        self.retiring = set()
         self.devices = {d["id"]: Device(**d) for d in saved["devices"]}
         self.save()
 
     def save(self):
         with self.lock:
-            data = dict(admin_token=self.admin_token, invite_token=self.invite_token, devices=[dict(id=d.id, name=d.name, token=d.token)
+            data = dict(admin_token=self.admin_token, invite_token=self.invite_token, devices=[dict(id=d.id, name=d.name, token=d.token, bt_id=d.bt_id, name_source=d.name_source)
                                                               for d in self.devices.values()])
             temporary = self.path.with_suffix(".tmp")
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -124,17 +132,50 @@ class Registry:
                 json.dump(data, file)
             os.replace(temporary, self.path)
 
-    def create(self, name):
+    def create(self, name, bt_id=None, name_source="fallback"):
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
             raise ValueError("Device name must have 1–80 characters")
         with self.lock:
             if len(self.devices) >= 64:
                 raise ValueError("64-device limit reached")
-            device = Device(uuid.uuid4().hex, name.strip(), secrets.token_hex(32))
+            if bt_id and (bt_id in self.retiring or any(d.bt_id == bt_id for d in self.devices.values())):
+                raise ValueError('This Bluetooth phone has already been added')
+            device = Device(uuid.uuid4().hex, name.strip(), secrets.token_hex(32), bt_id=bt_id, name_source=name_source)
             if self.backend_factory: device.backend = self.backend_factory(device)
             self.devices[device.id] = device
-            self.save()
+            try: self.save()
+            except OSError:
+                del self.devices[device.id]
+                device.backend.close()
+                raise
             return device
+
+    def bluetooth_peers(self):
+        if self.radio is None:
+            raise ValueError('Bluetooth HID is required. Pair your iPhone in AssistiveTouch > Devices > Bluetooth Devices first.')
+        result = []
+        for peer in self.radio.peers():
+            if set(peer.get('reports', [])) != {1, 2}: continue
+            name = ''.join(c for c in (peer.get('name') or '') if c.isprintable()).strip()[:80]
+            result.append(dict(peer, name=name or f"iPhone ({peer['id'][-4:]})",
+                               name_source=peer.get('name_source', 'fallback') if name else 'fallback'))
+        return result
+
+    def candidates(self):
+        peers = self.bluetooth_peers()
+        with self.lock:
+            added = {d.bt_id: d.id for d in self.devices.values() if d.bt_id}
+            retiring = set(self.retiring)
+        return [dict(p, bluetooth_connected=True, available=p['id'] not in added,
+                     device_id=added.get(p['id'])) for p in peers if p['id'] not in retiring]
+
+    def create_bluetooth(self, bt_id):
+        if not isinstance(bt_id, str) or not bt_id or len(bt_id) > 512:
+            raise ValueError('Select a Bluetooth-connected phone using bt_id')
+        peer = next((p for p in self.bluetooth_peers() if p['id'] == bt_id), None)
+        if peer is None:
+            raise ValueError('Bluetooth HID connection required; connect both keyboard and pointer reports before adding this phone')
+        return self.create(peer['name'], bt_id, peer['name_source'])
 
     def capture_device(self, token):
         with self.lock:
@@ -155,6 +196,7 @@ class Registry:
                 except OSError:
                     self.devices[device_id] = device
                     raise
+                if device.bt_id: self.retiring.add(device.bt_id)
                 device.removed = True
                 device.token = ""
                 device.epoch += 1
@@ -177,15 +219,33 @@ class Registry:
             warnings.append(str(error))
         with device.action_lock:
             pass  # Running input has finished; queued actions reject the tombstone.
+        with self.lock:
+            self.retiring.discard(device.bt_id)
         result = dict(ok=True, device_id=device_id, message="Phone removed; its sharing link is revoked.")
         if warnings:
             result["warnings"] = warnings
             result["message"] += " Control cleanup reported: " + "; ".join(warnings)
         return result
 
-    def list(self):
+    def list(self, include_links=False):
+        error = ''
+        try: peers = {p['id']: p for p in self.bluetooth_peers()}
+        except (OSError, ValueError) as failure:
+            peers, error = {}, str(failure)
         with self.lock:
-            return [d.summary() for d in self.devices.values()]
+            changed = False
+            result = []
+            for d in self.devices.values():
+                peer = peers.get(d.bt_id)
+                d.bluetooth_connected = peer is not None
+                d.bluetooth_error = error or ('' if peer else 'Bluetooth HID connection required')
+                if peer and (d.name, d.name_source) != (peer['name'], peer['name_source']):
+                    d.name, d.name_source = peer['name'], peer['name_source']; changed = True
+                item = d.summary()
+                if include_links: item['capture_path'] = f'/capture?token={d.token}'
+                result.append(item)
+            if changed: self.save()
+            return result
 
     def close(self):
         for device in list(self.devices.values()):

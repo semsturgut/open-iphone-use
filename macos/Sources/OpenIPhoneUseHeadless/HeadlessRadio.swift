@@ -12,7 +12,13 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
     private var mouse: CBMutableCharacteristic?
     private var peers: [String: CBCentral] = [:]
     private var subscriptions: [String: Set<Int>] = [:]
-    private var generations: [String: Int] = [:]
+    private let nameResolver = PeerNameResolver()
+    private lazy var reportQueue = PerCentralReportQueue { [weak self] id, report, payload in
+        guard let self, let manager = self.manager, let peer = self.peers[id],
+              self.subscriptions[id]?.contains(report) == true,
+              let characteristic = report == 1 ? self.keyboard : self.mouse else { return false }
+        return manager.updateValue(payload, for: characteristic, onSubscribedCentrals: [peer])
+    }
     private var broker: UnixSocketBroker?
     private var state = "starting"
     private var lastError: String?
@@ -26,6 +32,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
         }
         try broker?.start()
         if ProcessInfo.processInfo.environment["OIU_DISABLE_BLUETOOTH"] == "1" { state = "bluetoothDisabledForTest"; return }
+        nameResolver.start()
         manager = CBPeripheralManager(delegate: self, queue: .main,
                                       options: [CBPeripheralManagerOptionShowPowerAlertKey: true])
         Task { @MainActor [weak self] in
@@ -38,6 +45,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
 
     func stop() async {
         for id in Array(peers.keys) { await release(id) }
+        nameResolver.stop()
         manager?.stopAdvertising()
         manager?.removeAllServices()
         broker?.stop()
@@ -52,7 +60,9 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
                 return BrokerResponse(requestID: request.requestID, ok: true, message: String(ProcessInfo.processInfo.processIdentifier))
             case "radio_status":
                 result = ["state": state, "error": lastError ?? "", "peers": peers.keys.sorted().map {
-                    ["id": $0, "reports": Array(subscriptions[$0] ?? []).sorted()] as [String: Any]
+                    let name = nameResolver.name(peers[$0]!.identifier)
+                    return ["id": $0, "reports": Array(subscriptions[$0] ?? []).sorted(),
+                            "name": name.0, "name_source": name.1] as [String: Any]
                 }]
             case "radio_send":
                 guard let peer = request.key, let report = request.dx, let text = request.text,
@@ -76,27 +86,20 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
     }
 
     private func send(_ id: String, report: Int, payload: Data) async throws {
-        guard let manager, let peer = peers[id], subscriptions[id]?.contains(report) == true,
-              let characteristic = report == 1 ? keyboard : mouse else {
+        guard manager != nil, let peer = peers[id], subscriptions[id]?.contains(report) == true,
+              (report == 1 ? keyboard : mouse) != nil else {
             throw RadioError.message("iPhone disconnected or not subscribed to both HID reports; pair and enable AssistiveTouch")
         }
-        let generation = generations[id, default: 0]
-        let deadline = Date().addingTimeInterval(3)
-        while true {
-            try Task.checkCancellation()
-            guard generations[id, default: 0] == generation, peers[id] != nil,
-                  subscriptions[id]?.contains(report) == true else {
-                throw RadioError.message("HID send canceled or peer disconnected")
-            }
-            // Passing a concrete central array is essential: nil broadcasts to all phones.
-            if manager.updateValue(payload, for: characteristic, onSubscribedCentrals: [peer]) { return }
-            guard Date() < deadline else { throw RadioError.message("Bluetooth report backpressure timeout") }
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        guard payload.count <= peer.maximumUpdateValueLength else { throw RadioError.message("Bluetooth MTU too small") }
+        try await reportQueue.send(peer: id, report: report, payload: payload)
+    }
+
+    func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {
+        reportQueue.ready()
     }
 
     private func release(_ id: String) async {
-        generations[id, default: 0] += 1
+        reportQueue.cancel(peer: id)
         try? await send(id, report: 1, payload: HIDReportEncoder.keyboard(modifier: 0, usages: []))
         if let data = try? HIDReportEncoder.mouse() { try? await send(id, report: 2, payload: data) }
     }
@@ -116,7 +119,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
             default:
                 lastError = "Waiting for the host Bluetooth service; approve the OS permission prompt if shown."
             }
-            for id in peers.keys { generations[id, default: 0] += 1 }
+            for id in peers.keys { reportQueue.cancel(peer: id, forget: true) }
             peers.removeAll(); subscriptions.removeAll()
             return
         }
@@ -163,9 +166,12 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         guard let report = reportID(characteristic) else { return }
         let id = central.identifier.uuidString
-        generations[id, default: 0] += 1
+        reportQueue.cancel(peer: id)
         subscriptions[id]?.remove(report)
-        if subscriptions[id]?.isEmpty == true { peers.removeValue(forKey: id); subscriptions.removeValue(forKey: id) }
+        if subscriptions[id]?.isEmpty == true {
+            peers.removeValue(forKey: id); subscriptions.removeValue(forKey: id)
+            reportQueue.cancel(peer: id, forget: true)
+        }
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
@@ -174,7 +180,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
         case "2A4A": value = Data([0x11, 1, 0, 2])
         case "2A4B": value = BLEHIDPeripheral.reportDescriptor
         case "2A4E": value = Data([1])
-        case "2A4D": value = request.characteristic === keyboard ? Data(repeating: 0, count: 8) : Data(repeating: 0, count: 4)
+        case "2A4D": value = reportQueue.value(peer: request.central.identifier.uuidString, report: request.characteristic === keyboard ? 1 : 2)
         default: peripheral.respond(to: request, withResult: .attributeNotFound); return
         }
         guard request.offset >= 0 && request.offset <= value.count else { peripheral.respond(to: request, withResult: .invalidOffset); return }

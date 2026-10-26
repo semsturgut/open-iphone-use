@@ -53,7 +53,7 @@ class ControlTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory()
         self.radio=Radio()
         self.pairing=Pairing(self.radio)
-        self.engine=Control(self.pairing,Path(self.tmp.name)/'a')
+        self.engine=Control(self.pairing,Path(self.tmp.name)/'a',peer='phone-a')
         self.radio.engines['phone-a']=self.engine
         self.running=True
         def frames():
@@ -83,7 +83,7 @@ class ControlTests(unittest.TestCase):
         self.assertAlmostEqual(self.radio.positions['phone-a'][0],300,delta=5)
     def test_two_phone_association_and_targeted_keyboard(self):
         self.radio.positions['phone-b']=[0,0]
-        other=Control(self.pairing,Path(self.tmp.name)/'b')
+        other=Control(self.pairing,Path(self.tmp.name)/'b',peer='phone-b')
         self.radio.engines['phone-b']=other
         deadline=time.monotonic()+2
         while not other.at and time.monotonic()<deadline: time.sleep(.01)
@@ -95,39 +95,40 @@ class ControlTests(unittest.TestCase):
         self.assertTrue(result['ok'],result)
         self.assertTrue(self.radio.calls)
         self.assertTrue(all(call[0]=='phone-a' for call in self.radio.calls))
-    def test_stop_cancels_shared_pairing_probe_and_closes_all_boards(self):
-        self.radio.positions['phone-b']=[0,0]
-        other=Control(self.pairing,Path(self.tmp.name)/'b')
-        self.radio.engines['phone-b']=other
-        deadline=time.monotonic()+2
-        while not other.at and time.monotonic()<deadline: time.sleep(.01)
-        entered=threading.Event(); resume=threading.Event()
-        original=self.radio.send
-        def blocking_send(peer,report,payload):
-            if not entered.is_set():
+    def test_two_phone_preparation_is_parallel_and_never_guesses_a_peer(self):
+        self.radio.positions['phone-b'] = [0, 0]
+        other = Control(self.pairing, Path(self.tmp.name)/'b', peer='phone-b')
+        self.radio.engines['phone-b'] = other
+        entered, resume = threading.Event(), threading.Event()
+        original = self.radio.send
+        def delayed(peer, report, payload):
+            if peer == 'phone-a' and not entered.is_set():
                 entered.set()
-                if not resume.wait(3): raise OSError('Test probe timed out')
-            original(peer,report,payload)
-        self.radio.send=blocking_send
-        result=[]
-        thread=threading.Thread(target=lambda:result.append(self.engine.request('ensure_session')))
-        thread.start()
+                if not resume.wait(5): raise OSError('Test timed out')
+            original(peer, report, payload)
+        self.radio.send = delayed
+        result = []
+        first = threading.Thread(target=lambda: result.append(self.engine.request('ensure_session')))
+        first.start()
         try:
-            self.assertTrue(entered.wait(3),'Association did not reach its probe')
-            self.engine.stop_capture()
+            self.assertTrue(entered.wait(3))
+            second = other.request('ensure_session')
+            self.assertTrue(second['ok'], second)
+            self.assertTrue(first.is_alive(), 'Phone B must complete while phone A is blocked')
         finally:
-            resume.set(); thread.join(4)
-        self.assertFalse(thread.is_alive())
-        self.assertFalse(result[0]['ok'])
-        self.assertIn('canceled',result[0]['message'])
-        movements=[p for _,r,p in self.radio.calls if r==2 and any(p[1:])]
-        self.assertLessEqual(len(movements),1)
-        self.assertFalse(self.engine.board_open)
-        self.assertFalse(other.board_open)
+            resume.set(); first.join(4)
+        self.assertTrue(result[0]['ok'], result)
+        self.assertEqual(self.engine.peer, 'phone-a')
+        self.assertEqual(other.peer, 'phone-b')
+        self.assertIsNot(self.engine.calibration, other.calibration)
+        with self.assertRaises(ValueError): self.engine.bind('phone-b')
+        del self.radio.positions['phone-a']
+        self.assertFalse(self.engine.request('ensure_session')['ok'])
+        self.assertEqual(self.engine.peer, 'phone-a')
 
     def test_remove_detaches_control_and_erases_only_its_calibration(self):
         self.engine.bind('phone-a')
-        other = Control(self.pairing, Path(self.tmp.name)/'b')
+        other = Control(self.pairing, Path(self.tmp.name)/'b',peer='phone-b')
         other.bind('phone-b')
         self.engine.remove()
         self.assertTrue(self.engine.closed)
@@ -173,38 +174,12 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.radio.calls[-2:], [('phone-a', 1, keyboard()), ('phone-a', 2, mouse())])
         with self.assertRaises(ValueError): self.engine.request('type_text', text='later')
 
-    def test_remove_cancels_shared_association_without_leaving_an_engine(self):
-        self.radio.positions['phone-b'] = [0, 0]
-        other = Control(self.pairing, Path(self.tmp.name)/'b')
-        self.radio.engines['phone-b'] = other
-        deadline = time.monotonic() + 2
-        while not other.at and time.monotonic() < deadline: time.sleep(.01)
-        self.assertTrue(other.at)
-        entered, resume = threading.Event(), threading.Event()
-        original = self.radio.send
-        def delayed(peer, report, payload):
-            entered.set()
-            if not resume.wait(3): raise OSError('Test probe timed out')
-            original(peer, report, payload)
-        self.radio.send = delayed
-        result = []
-        action = threading.Thread(target=lambda: result.append(self.engine.request('ensure_session')))
-        action.start()
-        self.assertTrue(entered.wait(3))
-        removal = threading.Thread(target=self.engine.remove)
-        removal.start()
-        try:
-            deadline = time.monotonic() + 2
-            while not self.engine.closed and time.monotonic() < deadline: time.sleep(.01)
-            self.assertTrue(self.engine.closed)
-        finally:
-            resume.set(); action.join(4); removal.join(4)
-        self.assertFalse(action.is_alive())
-        self.assertFalse(removal.is_alive())
-        self.assertFalse(result[0]['ok'])
-        self.assertNotIn(self.engine, self.pairing.engines)
-        self.assertFalse(other.board_open)
-        self.assertLessEqual(sum(r == 2 and any(p[1:]) for _, r, p in self.radio.calls), 1)
+    def test_unbound_records_cannot_probe_or_steal_another_phone(self):
+        unbound = Control(self.pairing, Path(self.tmp.name)/'legacy')
+        unbound.ingest(screen())
+        self.assertFalse(unbound.request('ensure_session')['ok'])
+        self.assertEqual(self.radio.calls, [])
+        self.assertIsNone(unbound.peer)
 
     def test_stale_and_invalid_text_send_no_nonzero_reports(self):
         self.engine.bind('phone-a')

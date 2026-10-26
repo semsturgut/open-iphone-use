@@ -31,27 +31,22 @@ peer. It never encodes an implicit current phone. `Control` wraps a radio with o
 calibration, frame waits, pointer/keyboard state, stop generation and pairing binding.
 Capture uploads/tap/hover feedback stay concurrent with actions waiting for new images.
 The registry adds separate credentials, bounded action acceptance and stale/foreign frame
-checks. A global pairing lock only serializes association; already associated phones can
-act independently.
-
-One generic invitation enrolls independent browser identities. Persistent bindings are
-reused on reconnect; inactive captures can release ownership for automatic reassociation.
-Multiple unbound peers are correlated by targeted pointer movement on visible boards.
-Only an authenticated matching capture supplies the corresponding feedback. Ambiguity
-fails closed. Calibration clicks require both a measured board and visible pointer; normal
-absolute input uses the resulting device/peer/version/aspect-bound estimate. No visual
-feedback is inferred from HID acceptance alone.
+checks. Preparation and actions serialize only per device; no global association/calibration
+lock is held. The owner selects an exact live HID peer before a device/capture link exists.
+The binding is persistent and immutable: stopping a share never transfers it to another
+phone. Unbound legacy records cannot emit input. Calibration clicks require a measured
+board and visible pointer; HID acceptance does not establish the resulting UI behavior.
 
 TLS capture and the operator grid are separate listener roles: LAN HTTPS serves capture
 and authenticated APIs, a loopback HTTP listener avoids desktop certificate installation,
 and an HTTP bootstrap endpoint serves only public CA bytes. The private operator token
-and invitation/capture tokens have distinct permissions. CLI/MCP discover the loopback
+and capture tokens have distinct permissions; old generic enrollment is disabled. CLI/MCP discover the loopback
 connection from private state rather than requiring manual URL/CA configuration.
 
 ## Native service details
 
 - macOS: one CoreBluetooth manager and HID service; independent central subscriptions,
-  report backpressure/cancellation and targeted release. The old single-phone Swift
+  FIFO queues, last-report state, readiness-driven backpressure/cancellation and targeted release. The old single-phone Swift
   controller remains intact for standalone-app compatibility and legacy checks.
 - Linux: exported ObjectManager/service/characteristic/descriptor tree, encrypted HOGP,
   connectable advertising, owner-confirmed pairing, and per-peer acquired notification

@@ -16,13 +16,18 @@ PARAMETERS = {
 
 def tools():
     result = []
-    for name in ["list_devices", "remove_device", "get_device_status", "get_latest_screenshot", "stop_control", *sorted(ACTIONS)]:
-        props = {} if name == "list_devices" else {"device_id": {"type": "string"}}
+    for name in ["list_devices", "list_bluetooth_candidates", "create_device", "remove_device", "get_device_status", "get_latest_screenshot", "stop_control", *sorted(ACTIONS)]:
+        props = {} if name in ("list_devices", "list_bluetooth_candidates") else {"device_id": {"type": "string"}}
+        if name == 'create_device': props = {'bt_id': {'type': 'string'}}
         if name in ACTIONS:
             props["expected_frame_id"] = {"type": "string"}
             props.update({key: {"type": kind} for key, kind in PARAMETERS.get(name, {}).items()})
         result.append(dict(name=name, description=f"{name.replace('_', ' ')}. Choose a device explicitly; inspect each resulting screen. HID acceptance does not prove UI success.",
                            inputSchema=dict(type="object", properties=props, required=list(props), additionalProperties=False)))
+        if name == 'create_device':
+            result[-1]['description'] = 'Create a phone bound to the explicitly selected Bluetooth HID peer from list_bluetooth_candidates. Returns its private capture_path; combine with setup capture_origin. Bluetooth must be connected before adding.'
+        if name == 'list_bluetooth_candidates':
+            result[-1]['description'] = 'List connected Bluetooth HID phones, their names, availability and exact bt_id (id). Pairing in AssistiveTouch is required; never guess a peer.'
         if name == 'remove_device':
             result[-1]['description'] = 'Remove the explicitly selected phone, revoke its sharing link and cancel control. Use only when the user requests removal; OS Bluetooth pairing is retained.'
             result[-1]['annotations'] = dict(destructiveHint=True, readOnlyHint=False)
@@ -35,7 +40,7 @@ def handle(args, method, params):
         version = requested if requested in ("2024-11-05", "2025-03-26", "2025-06-18") else "2024-11-05"
         return dict(protocolVersion=version, capabilities={"tools": {}},
                     serverInfo={"name": "open-iphone-use-portable", "version": "0.1.0"},
-                    instructions="List devices; choose the intended device_id. Read a fresh screenshot, then act with expected_frame_id. Inspect a new screen after each action. Owner pairing/sharing/unlocking is required.")
+                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Read a fresh screenshot, then act with expected_frame_id. Inspect a new screen after each action. Owner pairing/sharing/unlocking is required.")
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -56,6 +61,11 @@ def handle(args, method, params):
                 raise ValueError(f"Invalid {key}")
         if name == "list_devices":
             result = call(args, "/api/devices")
+        elif name == 'list_bluetooth_candidates':
+            result = call(args, '/api/bluetooth')
+        elif name == 'create_device':
+            result = call(args, '/api/devices', {'bt_id': arguments['bt_id']})
+            result['capture_url'] = call(args, '/api/setup')['capture_origin'] + result['capture_path']
         else:
             device = arguments.pop("device_id")
             if not device.isalnum():

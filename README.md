@@ -45,45 +45,47 @@ bindings. Xcode/Swift 6 installation on Mac and owner/system permission approval
 required. Existing client settings are merged and backed up. Re-running setup updates the
 managed install. [Installer options and uninstall](docs/installation.md).
 
-### Open the web UI and connect iPhones
+### Pair first, then add each iPhone
 
-`serve` prints the private localhost operator link, an iPhone sharing link, the public CA
-certificate URL and its fingerprint. It selects the host's native Bluetooth backend and
-creates/reuses HTTPS certificates automatically. No DMG, app window, backend JSON or
-Bluetooth UUID configuration is required.
+1. Run `sh setup.sh`, then `open-iphone-use serve`. Approve the Mac Bluetooth permission
+   prompt. For background use, run `open-iphone-use serve --daemon`; stop it later with
+   `open-iphone-use stop`. Closing the launching terminal does not stop a daemon. It is
+   not an automatic login/reboot service. The log is private at `~/.open-iphone-use/server.log`.
+2. On an unlocked iPhone, enable AssistiveTouch and open **Settings → Accessibility →
+   Touch → AssistiveTouch → Devices → Bluetooth Devices → Open iPhone Use**. Confirm the
+   owner pairing prompts (Windows may advertise the PC name). Wait for both HID reports
+   to connect. A Bluetooth pairing saved in settings alone is not a live connection.
+3. Run `open-iphone-use new`. It lists connected, not-yet-added phones; choose one, or
+   use `open-iphone-use new --bt <id>`. If exactly one is available, it is selected
+   automatically. The device is permanently bound to that Bluetooth peer, gets its
+   Bluetooth name and receives a private sharing link plus a terminal QR code.
+   Alternatively open the printed localhost operator UI and select **Add phone** from
+   **Bluetooth-connected phones**. There is no free-text Bluetooth onboarding form.
+4. On first use, install the printed public CA on the iPhone, verify its SHA-256
+   fingerprint against the terminal, and enable it under **Settings → General → About →
+   Certificate Trust Settings**. The `new`/`link` output includes the CA download address
+   and fingerprint. The localhost operator UI requires no desktop certificate trust.
+5. Scan that phone's QR code **on that same iPhone**, open Safari and approve **Start
+   sharing**. Each added phone appears immediately in the side-by-side grid with its
+   own persistent Share/AirDrop, Copy and QR controls, Bluetooth status and sharing status.
+   `open-iphone-use link <device>` reprints the private link and terminal QR at any time.
+6. Tap its live screen to control it; the first tap automatically prepares that phone's
+   pointer with Safari visible. CLI/MCP also provide keyboard, typing, scroll and release
+   input. Both Bluetooth HID and fresh sharing are required. Inspect every resulting screen.
+7. Use **Remove** beside a tile's link and confirm, or run `open-iphone-use remove <device>`
+   (`remove --device <id>` also works). Removal cancels input, clears frames/calibration
+   and permanently revokes that link. OS Bluetooth bonds and other phones remain intact.
 
-1. Open the printed **localhost web UI** (normally `http://127.0.0.1:27893`). Its operator
-   link logs you in. This loopback UI needs no certificate installation on the host.
-   Use **Share** beside the private invitation to send it via AirDrop on supported Mac
-   browsers, **Copy** to copy it, or scan its QR code with the iPhone camera.
-   **Create sharing link** makes a named phone link with the same controls. Share is
-   hidden when the browser has no system sharing API; Copy remains available.
-   Every registered phone (including `open-iphone-use add`) appears immediately in the
-   side-by-side grid with a **Waiting for screen sharing** placeholder and control/pairing
-   status. Each tile keeps its own sharing link, Share, Copy and QR controls after refresh
-   and server restart. Links are private capture credentials, returned only to an
-   authenticated operator by `GET /api/devices` as `capture_path`; the server retains
-   their tokens in its private `state.json` (0600).
-2. Install the public CA on each iPhone, checking its fingerprint against the terminal,
-   and explicitly enable it under **Settings → General → About → Certificate Trust Settings**.
-   The public certificate can be downloaded from the printed HTTP link or transferred
-   through a trusted channel. Its private key stays on the server.
-3. Enable **AssistiveTouch** on each unlocked iPhone. Under **Touch → AssistiveTouch → Devices →
-   Bluetooth Devices**, pair with **Open iPhone Use** (Windows may show the PC name).
-   Approve the host Bluetooth prompt and the phone's pairing confirmation. On headless
-   Linux, the server asks the owner to confirm pairing codes in its terminal.
-4. Open the same printed **private HTTPS sharing invitation** in Safari on each iPhone.
-   Each browser gets its own device identity and capture token. Tap **Start sharing** and
-   approve iOS sharing. The live screen replaces that phone’s placeholder in the same tile.
-5. Tap a live screen in its tile. The first tap automatically runs `ensure_session`;
-   keep Safari visible while the pointer is measured. Bluetooth peers are associated
-   automatically; no central IDs need to be copied. Keyboard, typing, scroll and explicit
-   preparation/release actions are available through CLI/MCP. Inspect the result after
-   every action.
-6. Use **Remove** beside a phone’s sharing link and confirm to delete that phone, stop
-   its control and revoke its link. Its tile, saved identity and calibration are removed;
-   other phones and OS Bluetooth pairings stay intact. You can also run
-   `open-iphone-use remove --device <id>` or ask your MCP agent to use `remove_device`.
+For **two iPhones**, repeat pairing → `new` → scan for each. Select the exact Bluetooth
+peer for each link; each phone has its own frames, calibration, action queue and targeted
+HID reports. They can be prepared and controlled concurrently. On macOS a real name may
+be unavailable: the safe label is `iPhone (abcd)`, never a guessed name from another phone.
+If both names are unavailable, pair/add one at a time to identify the correct link.
+Linux/Windows have real native implementations; adapter/driver and notification limits
+still apply. Physical two-phone behavior requires verification on the owner's hardware.
+
+The host browser is optional: setup, background serving, phone selection, link/QR display,
+status, removal and control all work through CLI/MCP. Safari on each phone supplies capture.
 
 With automatic LAN detection and generated certificates (the default), the HTTPS capture
 and public-certificate listeners bind all IPv4 interfaces. The operator UI checks the
@@ -105,7 +107,11 @@ platform restrictions, and the boundary between software checks and real iPhone 
 ```sh
 open-iphone-use devices
 open-iphone-use status --device DEVICE_ID
-open-iphone-use add "Named test iPhone"  # optional named sharing link
+open-iphone-use bluetooth              # connected HID candidates, names and IDs
+open-iphone-use new --bt BLUETOOTH_ID   # select that exact connected phone
+open-iphone-use link DEVICE_ID          # persistent link + terminal QR
+open-iphone-use serve --daemon          # optional background server
+open-iphone-use stop
 open-iphone-use remove --device DEVICE_ID # remove phone and revoke its link
 open-iphone-use action --device DEVICE_ID send_key \
   --arguments '{"expectedFrameID":"FRESH_FRAME_ID","key":"cmd+h"}'

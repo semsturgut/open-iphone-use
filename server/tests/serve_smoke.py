@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 from urllib.request import Request,urlopen
+from urllib.error import HTTPError
 from PIL import Image
 
 cli=str(Path(sys.argv[1]).resolve())
@@ -38,23 +39,26 @@ with tempfile.TemporaryDirectory(prefix='oiu-smoke-') as directory:
             with urlopen(Request(connection['url']+path,data=body,headers=auth),timeout=5) as response: return json.load(response)
         setup=api('/api/setup')
         assert setup['capture_origin']==public
-        for _ in range(2):
-            enrolled=api('/api/enroll',b'{}',{'X-Open-iPhone-Use-Invite':saved['invite_token']})
-            token=enrolled['capture_path'].split('token=')[1]
-            output=BytesIO(); Image.new('RGB',(360,640),(30,80,120)).save(output,format='JPEG')
-            with urlopen(Request(public+'/api/frame',data=output.getvalue(),headers={'X-Open-iPhone-Use-Token':token}),context=context,timeout=5) as response:
-                assert json.load(response)['frameID']
-        devices=api('/api/devices')
-        assert len(devices)==2 and all(d['capture_active'] for d in devices)
+        # Bluetooth-first enrollment must not create fake phones when no hardware peers exist.
+        try: candidates=api('/api/bluetooth')
+        except HTTPError as error:
+            assert error.code==400;error.close();candidates=[]
+        try: api('/api/devices',b'{"name":"unbound"}')
+        except HTTPError as error: assert error.code==400;error.close()
+        else: raise AssertionError('Free-text enrollment must be rejected')
+        try: api('/api/enroll',b'{}')
+        except HTTPError as error: assert error.code==410;error.close()
+        else: raise AssertionError('Legacy invitation enrollment must be rejected')
+        assert api('/api/devices')==[]
         result=subprocess.run([cli,'--state',directory,'devices'],capture_output=True,text=True,check=True)
-        assert len(json.loads(result.stdout))==2
+        assert json.loads(result.stdout)==[]
         if sys.platform=='darwin':
             with socket.socket(socket.AF_UNIX) as channel:
                 channel.settimeout(3);channel.connect(str(state/'radio/bridge.sock'))
                 channel.sendall(b'{"requestID":"smoke-status","operation":"radio_status","deviceID":"iphone"}\n')
                 with channel.makefile('rb') as reader: status=json.loads(json.loads(reader.readline())['message'])
                 print('Native macOS radio state:',status['state'],'; subscribed peers:',len(status['peers']))
-        print('PASS installed serve: automatic native backend, CA/TLS, localhost grid/API, independent enrollments/uploads and CLI devices. No physical input was sent.')
+        print('PASS installed serve: automatic native backend, CA/TLS, localhost grid/API, Bluetooth-first enrollment gate and CLI devices. No physical input was sent.')
     finally:
         process.terminate()
         try: process.wait(8)

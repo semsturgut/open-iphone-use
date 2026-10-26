@@ -47,12 +47,21 @@ class FakeHID:
         self.closed = True
 
 
+class FakeRadio:
+    def __init__(self):
+        self.items = [dict(id='bt-a',name='Phone A',name_source='test-bluetooth',reports=[1,2]),
+                      dict(id='bt-b',name='Phone B',name_source='test-bluetooth',reports=[1,2]),
+                      dict(id='bt-c',name='Phone C',name_source='test-bluetooth',reports=[1,2])]
+    def peers(self): return self.items
+
+
 class ServerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.registry = Registry(self.tmp.name)
-        self.a = self.registry.create('Phone A')
-        self.b = self.registry.create('Phone B')
+        self.registry.radio = FakeRadio()
+        self.a = self.registry.create_bluetooth('bt-a')
+        self.b = self.registry.create_bluetooth('bt-b')
         self.a.backend, self.b.backend = FakeHID(), FakeHID()
         self.server = Server(('127.0.0.1', 0), self.registry)
         self.url = 'http://127.0.0.1:' + str(self.server.server_port)
@@ -112,7 +121,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.registry.path.stat().st_mode & 0o777, 0o600)
 
     def test_registered_devices_have_private_persistent_links_before_frames(self):
-        created = self.api('/api/devices', json.dumps({'name': 'Phone C'}).encode())
+        created = self.api('/api/devices', json.dumps({'bt_id': 'bt-c'}).encode())
         before = self.api('/api/devices')
         self.assertEqual(len(before), 3)
         for device in before:
@@ -324,7 +333,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(replies[2]['result']['content'][1]['type'], 'image')
         self.assertTrue(replies[3]['result']['isError'])
         for tool in tools():
-            if tool['name'] != 'list_devices':
+            if tool['name'] not in ('list_devices','list_bluetooth_candidates','create_device'):
                 self.assertIn('device_id', tool['inputSchema']['required'])
 
     def test_cli_serve_shutdown_and_lease_release(self):
@@ -352,18 +361,80 @@ class ServerTests(unittest.TestCase):
             process.stdout.close()
             process.stderr.close()
 
-    def test_shared_invitation_enrolls_independent_capture_credentials(self):
-        def enroll(invite):
-            return self.api('/api/enroll', b'{}', extra={'X-Open-iPhone-Use-Invite':invite})
-        with self.assertRaises(HTTPError): enroll('invalid')
-        first,second=enroll(self.registry.invite_token),enroll(self.registry.invite_token)
-        self.assertNotEqual(first['capture_path'],second['capture_path'])
-        for item in (first,second):
-            self.api('/api/frame',JPEG,item['capture_path'].split('token=')[1],True)
-        devices=self.api('/api/devices')
-        self.assertEqual(len(devices),4)
-        self.assertEqual(sum(d['capture_active'] for d in devices),2)
-        self.assertEqual(len({d['name'] for d in devices}),4)
+    def test_bluetooth_first_creation_requires_connected_unique_selected_peer(self):
+        candidates = self.api('/api/bluetooth')
+        self.assertEqual([p['id'] for p in candidates if p['available']], ['bt-c'])
+        with self.assertRaises(HTTPError) as error: self.api('/api/bluetooth',token=self.a.token)
+        self.assertEqual(error.exception.code,401)
+        for body in ({'name':'arbitrary'}, {'bt_id':'missing'}, {'bt_id':'bt-a'}):
+            with self.assertRaises(HTTPError) as error:
+                self.api('/api/devices',json.dumps(body).encode())
+            self.assertEqual(error.exception.code,400)
+        self.registry.radio.items[2]['reports']=[1]
+        with self.assertRaises(HTTPError): self.api('/api/devices',b'{"bt_id":"bt-c"}')
+        self.registry.radio.items[2]['reports']=[1,2]
+        created = self.api('/api/devices',b'{"bt_id":"bt-c"}')
+        self.assertEqual(created['name'],'Phone C')
+        self.assertEqual(created['bt_id'],'bt-c')
+        device = self.registry.devices[created['device_id']]
+        self.assertEqual(Registry(self.tmp.name).devices[device.id].bt_id,'bt-c')
+        self.assertIsNone(device.frame_id)
+        for route, body in [('/api/enroll',b'{}'),('/join?token='+self.registry.invite_token,None)]:
+            with self.assertRaises(HTTPError) as error: self.api(route,body)
+            self.assertEqual(error.exception.code,410)
+
+    def test_bluetooth_and_sharing_status_are_independent(self):
+        self.a.upload(JPEG)
+        before = self.api('/api/devices')
+        self.assertTrue(before[0]['bluetooth_connected'])
+        self.assertTrue(before[0]['sharing_active'])
+        self.assertTrue(before[1]['bluetooth_connected'])
+        self.assertFalse(before[1]['sharing_active'])
+        self.registry.radio.items = [p for p in self.registry.radio.items if p['id']!='bt-a']
+        after = self.api('/api/devices')
+        self.assertFalse(after[0]['bluetooth_connected'])
+        self.assertTrue(after[0]['sharing_active'])
+        self.assertIn('required',after[0]['bluetooth_error'])
+        status = self.api(f'/api/devices/{self.a.id}/status')
+        self.assertFalse(status['device']['bluetooth_connected'])
+
+    def test_new_link_and_management_mcp(self):
+        base=[sys.executable,'-m','oiu.cli','--state',self.tmp.name,'--url',self.url]
+        new=subprocess.run(base+['new'],check=True,capture_output=True,text=True)
+        self.assertIn('Phone C',new.stdout)
+        self.assertIn('/capture?token=',new.stdout)
+        self.assertIn('██',new.stdout)
+        device=next(d for d in self.registry.devices.values() if d.bt_id=='bt-c')
+        link=subprocess.run(base+['link',device.id],check=True,capture_output=True,text=True)
+        self.assertIn(device.token,link.stdout)
+        removed=subprocess.run(base+['remove',device.id],check=True,capture_output=True,text=True)
+        self.assertTrue(json.loads(removed.stdout)['ok'])
+        messages=[dict(jsonrpc='2.0',id=1,method='tools/call',params={'name':'list_bluetooth_candidates'}),
+                  dict(jsonrpc='2.0',id=2,method='tools/call',params={'name':'create_device','arguments':{'bt_id':'bt-c'}})]
+        mcp=subprocess.run(base+['mcp'],input='\n'.join(map(json.dumps,messages))+'\n',check=True,capture_output=True,text=True)
+        replies=list(map(json.loads,mcp.stdout.splitlines()))
+        self.assertTrue(all(not r['result']['isError'] for r in replies))
+        self.assertIn('capture_url',json.loads(replies[1]['result']['content'][0]['text']))
+
+    def test_cli_new_requires_explicit_selection_when_two_candidates_are_available(self):
+        self.registry.radio.items.append(dict(id='bt-d',name='Phone D',reports=[1,2]))
+        base=[sys.executable,'-m','oiu.cli','--state',self.tmp.name,'--url',self.url]
+        ambiguous=subprocess.run(base+['new'],capture_output=True,text=True)
+        self.assertNotEqual(ambiguous.returncode,0)
+        self.assertIn('--bt',ambiguous.stderr)
+        selected=subprocess.run(base+['new','--bt','bt-d'],check=True,capture_output=True,text=True)
+        self.assertIn('Phone D',selected.stdout)
+        self.assertEqual(len(self.registry.devices),3)
+        self.assertTrue(any(d.bt_id=='bt-d' for d in self.registry.devices.values()))
+
+    def test_name_fallback_and_sanitization_never_use_another_peers_name(self):
+        self.registry.radio.items[2].pop('name')
+        candidate=next(p for p in self.api('/api/bluetooth') if p['id']=='bt-c')
+        self.assertEqual(candidate['name'],'iPhone (bt-c)')
+        self.registry.radio.items[2]['name']='Unsafe\x1b[31m\nName'
+        created=self.api('/api/devices',b'{"bt_id":"bt-c"}')
+        self.assertNotIn('\x1b',created['name'])
+        self.assertNotIn('\n',created['name'])
 
     def test_setup_updates_auto_origin_and_live_tls_certificate_on_network_change(self):
         import socket

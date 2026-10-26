@@ -86,3 +86,21 @@ PowerShell. The installer test must use a temporary HOME, install root and bin d
 
 The earlier demo/device-matrix results describe the standalone Mac path. No push, release
 or distribution-artifact update was performed for this work; `tools/` was left untouched.
+
+
+## Bluetooth-first update
+
+The old generic-enrollment and automatic screen-association checks above describe the
+previous revision. The current flow requires an explicitly selected live Bluetooth peer;
+`/join` and `/api/enroll` return 410. Current regression coverage includes two-phone
+calibration in parallel with one blocked peer, Swift per-central FIFO/backpressure/read
+state/cancellation, exact-identity BlueZ/WinRT name resolution, native full-UUID publication,
+Bluetooth/sharing status, strict enrollment, CLI new/link/remove terminal QR, management
+MCP schemas and stdio calls, and a real detached capture-only daemon's start/duplicate/stop
+lifecycle. Capture-only mode cannot add a device.
+
+Mac name retrieval tries exact-UUID cached peripheral/GAP lookup and marks a fallback when
+unavailable. No personal device names/addresses were printed during schema inspection;
+this sandbox's system_profiler call yielded no usable mapping. Real name lookup, paired
+HID subscriptions, two physical iPhone taps and reconnect behavior remain unverified.
+The simulator tests are not evidence of physical multi-phone radio capacity.

@@ -44,15 +44,15 @@ is retained. Advertising does not establish successful iPhone pairing or input.
   clears transient peers. Python saves device-to-peer/calibration bindings and checks
   current subscriptions; re-pairing with a changed identity requires fresh screen
   association. OS bonds are not recreated or removed automatically. The legacy
-  native path uses a single central and a report queue; headless uses explicit
-  per-central sends with a 3-second backpressure deadline. Neither OS acceptance nor
+  native path uses a single central and a report queue; headless uses independent
+  per-central FIFO queues with a 3-second backpressure deadline. Neither OS acceptance nor
   a saved binding proves post-restart input delivery; owners may need to reconnect
   in AssistiveTouch and prepare with Safari visible (automatically on the first tile
   tap, or explicitly through CLI/MCP).
 - **Timing:** portable control retains 8 ms motion spacing, 24 ms keyboard press/release
   spacing and 35 ms pointer presses (legacy native click: 30 ms). Shared Mac sends
-  retry backpressure every 5 ms, preserving order through the serialized device
-  action path. No unmeasured connection-interval tuning was introduced. iPhone
+  retry from peripheralManagerIsReady callbacks, preserving FIFO order per central
+  without gating another central. No unmeasured connection-interval tuning was introduced. iPhone
   acceleration, radio latency and simultaneous-device capacity remain hardware tests.
 
 ## Network changes
@@ -72,7 +72,7 @@ Regression checks cover the full macOS service UUID and shared descriptor, actua
 startup schemas with a fake D-Bus boundary, actual WinRT startup/write/notify methods
 with fake projections, rejection of ambiguous broadcasts, and an authenticated address
 change followed by a real TLS handshake on the existing listener for the new IP using
-the original CA. Browser checks exercise invitation and tile-link updates.
+the original CA. Browser checks exercise Bluetooth candidate selection and tile-link updates.
 
 These checks do not load WinRT on Windows, run a Linux radio, pair an iPhone, or verify a
 physical tap. The owner's `advertising` result is recorded separately from our software

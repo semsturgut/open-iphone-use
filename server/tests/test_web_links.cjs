@@ -41,11 +41,12 @@ const document = {
 };
 const navigator = {};
 const requests = [];
+let btCandidates = [{id:'bt-a',name:'Phone A',name_source:'fallback',reports:[1,2],available:false}, {id:'bt-b',name:'Phone B',reports:[1,2],available:false}, {id:'bt-c',name:'Phone C',reports:[1,2],available:true}];
 let devices = [
   {device_id: 'phone-a', name: 'Phone A', frame_id: null, age_ms: null, capture_active: false,
-   control_status: 'Pair iPhone, then Prepare', capture_path: '/capture?token=phone-a'},
+   bluetooth_connected: true, bt_id:'bt-a', control_status: 'Pair iPhone, then tap screen', capture_path: '/capture?token=phone-a'},
   {device_id: 'phone-b', name: 'Phone B', frame_id: null, age_ms: null, capture_active: false,
-   control_status: 'Paired; prepare pointer', capture_path: '/capture?token=phone-b'}
+   bluetooth_connected: true, bt_id:'bt-b', control_status: 'Paired; first tap prepares pointer', capture_path: '/capture?token=phone-b'}
 ];
 const revoked = [];
 let blobCounter = 0;
@@ -61,17 +62,20 @@ const context = vm.createContext({
     requests.push(url);
     assert.equal(options.headers.Authorization, 'Bearer operator');
     let data;
-    if (url === '/api/setup') data = {capture_origin: captureOrigin, join_path: '/join?token=private'};
+    if (url === '/api/setup') data = {capture_origin: captureOrigin, bluetooth_required: true};
+    else if (url === '/api/bluetooth') data = btCandidates;
     else if (options.method === 'DELETE') {
       deletes.push(url);
       if (deleteFails) return {ok: false, json: async () => ({error: 'Removal failed'})};
       const id = url.split('/').pop();
       devices = devices.filter(d => d.device_id !== id);
       data = {ok: true, message: 'Phone removed; its sharing link is revoked.'};
-    } else if (options.method === 'POST') {
+    } else if (options.method === 'POST' && url === '/api/devices') {
+      const peer = btCandidates.find(p => p.id === JSON.parse(options.body).bt_id);
+      assert.ok(peer.available);
       const id = 'phone-' + devices.length;
-      data = {device_id: id, name: 'Test phone', frame_id: null, capture_path: '/capture?token=' + id};
-      devices.push(data);
+      data = {device_id:id,name:peer.name,bt_id:peer.id,bluetooth_connected:true,frame_id:null,capture_path:'/capture?token='+id};
+      devices.push(data); peer.available=false;
     } else if (url.endsWith('/snapshot')) {
       const device = devices.find(d => url.includes('/' + d.device_id + '/'));
       data = {frame: {frameID: device.frame_id, base64: 'aW1hZ2U='}};
@@ -120,18 +124,14 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
   copyResult = false;
   await buttons(root)[0].onclick(); assert.match(status.textContent, /Could not copy/);
   assert.equal(document.body.children.length, 0); assert.equal(document.activeElement, previous);
-  // Exercise the actual setup and create-link paths, including repeated creation.
+  // Only Bluetooth-selected candidates can create records; no free-text form remains.
   await run("token = 'operator'; refresh()");
-  const join = document.getElementById('join');
-  assert.equal(join.children[0].children[1].children[0].href, 'https://192.168.1.2:27891/join?token=private');
-  status.textContent = 'Sharing denied';
-  await run('refresh()'); assert.equal(status.textContent, 'Sharing denied');
-  for (let i = 0; i < 2; i++) {
-    document.getElementById('name').value = 'Test phone';
-    await document.getElementById('add').onsubmit({preventDefault() {}});
-  }
+  const list = document.getElementById('bluetooth-list');
+  assert.equal(list.children.length, 3);
+  assert.equal(list.children[0].children[1].disabled, true);
+  await list.children[2].children[1].onclick();
   const grid = document.getElementById('grid');
-  assert.equal(grid.children.length, 4); // Includes registered phones that never uploaded.
+  assert.equal(grid.children.length, 3);
   assert.equal(document.getElementById('empty').hidden, true);
   assert.equal(requests.filter(url => url.endsWith('/snapshot')).length, 0);
   for (let i = 0; i < devices.length; i++) {
@@ -148,13 +148,14 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
     assert.equal(tile.querySelector('form'), undefined);
   }
   assert.match(grid.children[0].querySelector('.status').textContent, /Pair iPhone/);
-  assert.match(grid.children[1].querySelector('.status').textContent, /Paired; prepare/);
+  assert.match(grid.children[1].querySelector('.status').textContent, /Paired; first tap/);
   // Frame ingress upgrades the same tile and keeps its sharing controls intact.
   const firstTile = grid.children[0], firstLink = firstTile.querySelector('.device-link').firstChild;
   Object.assign(devices[0], {frame_id: 'frame-1', capture_active: true, age_ms: 1});
   await run('refresh()');
   assert.equal(grid.children[0], firstTile);
   assert.equal(firstTile.querySelector('.placeholder').hidden, true);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(firstTile.querySelector('img').hidden, false);
   assert.equal(firstTile.querySelector('.device-link').firstChild, firstLink);
   assert.equal(run("tiles.get('phone-a').frame"), 'frame-1');
@@ -167,9 +168,9 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
   assert.equal(firstTile.querySelector('.placeholder').hidden, false);
   assert.ok(revoked.includes('blob:1'));
   // Simulate a fresh page: no retained tiles or creation responses.
-  grid.replaceChildren(); run('tiles.clear()'); join.replaceChildren();
+  grid.replaceChildren(); run('tiles.clear()');
   await run('refresh()');
-  assert.equal(grid.children.length, 4);
+  assert.equal(grid.children.length, 3);
   for (let i = 0; i < devices.length; i++) {
     assert.equal(grid.children[i].querySelector('.device-link').firstChild.children[1].children[0].href,
       'https://192.168.1.2:27891' + devices[i].capture_path);
@@ -177,7 +178,6 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
   // A route change refreshes the invitation and every phone link without reloading.
   captureOrigin = 'https://172.20.10.2:27891';
   await run('setupCheckedAt = 0; refresh()');
-  assert.equal(join.firstChild.children[1].children[0].href, captureOrigin + '/join?token=private');
   for (let i = 0; i < devices.length; i++) {
     assert.equal(grid.children[i].querySelector('.device-link').firstChild.children[1].children[0].href,
       captureOrigin + devices[i].capture_path);
@@ -197,14 +197,15 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
   deleteFails = false;
   Object.assign(devices[0], {frame_id: 'frame-for-removal', capture_active: true, age_ms: 1});
   await run('refresh()');
+  await new Promise(resolve => setImmediate(resolve));
   const removalURL = removedTile.querySelector('img').src;
   await remove.onclick();
   assert.equal(deletes.at(-1), '/api/devices/phone-a');
   assert.ok(revoked.includes(removalURL));
-  assert.equal(grid.children.length, 3);
+  assert.equal(grid.children.length, 2);
   assert.equal(run("tiles.has('phone-a')"), false);
   await run('refresh()');
-  assert.equal(grid.children.length, 3);
+  assert.equal(grid.children.length, 2);
   devices = [];
   await run('refresh()');
   assert.equal(grid.children.length, 0);

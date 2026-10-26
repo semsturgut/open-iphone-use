@@ -1,4 +1,4 @@
-"""Portable per-device HID lifecycle, safe board calibration and automatic peer binding."""
+"""Portable per-device HID lifecycle, safe board calibration and explicit Bluetooth peer binding."""
 from collections import deque
 import json
 import base64
@@ -27,86 +27,29 @@ class Pairing:
         self.lock = threading.Lock()
 
     def associate(self, engine):
-        with self.lock:
-            if engine.closed:
-                raise ValueError('Device removed or control closed')
-            peers = [p['id'] for p in self.radio.peers() if set(p['reports']) == {1,2}]
-            if engine.peer in peers: return engine.peer
-            if engine.peer:
-                # Re-pairing may change the OS peer identity. Re-associate from live boards,
-                # never require the owner to find/copy an internal UUID.
-                engine.peer=None; engine.calibration=None
-            claimed = {e.peer for e in self.engines if e.peer and (e.is_fresh() or e.closed)}
-            candidates = [p for p in peers if p not in claimed]
-            if not candidates: raise ValueError('Pair this host as Open iPhone Use in Settings > Accessibility > Touch > AssistiveTouch > Devices > Bluetooth Devices; allow the host Bluetooth permission prompt')
-            active = [e for e in self.engines if not e.peer and e.is_fresh()]
-            if len(candidates) == 1 and len(active) == 1:
-                engine.bind(candidates[0]); return engine.peer
-            if len(active) != len(candidates):
-                raise ValueError('Keep every newly paired phone sharing its Safari page for automatic association, or pair/share new phones one at a time')
-            # Preserve each generation across the whole shared association operation:
-            # a stop/restart or stale candidate must not let raw probe reports continue.
-            generations = {e: e.generation for e in active}
-            def guard():
-                if any(e.generation != generations[e] or not e.is_fresh() for e in active):
-                    raise ValueError('Automatic pairing canceled or candidate capture became stale')
-            epoch = uuid.uuid4().hex
-            try:
-                for e in active:
-                    e.sending_generation=e.generation
-                    e.open_board(True, pair_epoch=epoch)
-                for e in active:
-                    guard()
-                    e.wait_board()
-                for peer in candidates:
-                    guard()
-                    if peer in {e.peer for e in self.engines if e.peer and e.is_fresh()}: continue
-                    pending = [e for e in active if not e.peer]
-                    before = {}
-                    for e in pending:
-                        try: before[e] = vision.pointer(e.jpeg)[0]
-                        except ValueError: before[e] = None
-                        e.hover = None
-                    started = time.monotonic()
-                    try:
-                        movements = [mouse(dx=-127)]*8 + [mouse(dy=-127)]*8 + [mouse(dx=8,dy=16)]*8
-                        for payload in movements:
-                            guard()
-                            self.radio.send(peer, 2, payload)
-                            time.sleep(.008)
-                        deadline = time.monotonic()+5
-                        matched = None
-                        while time.monotonic() < deadline:
-                            guard()
-                            matches = [e for e in pending if e.hover and e.hover[0] >= started and e.hover[1] == epoch]
-                            if not matches:
-                                for e in pending:
-                                    if e.at < started: continue
-                                    try: point = vision.pointer(e.jpeg)[0]
-                                    except ValueError: continue
-                                    old = before[e]
-                                    if old is None or math.dist(point,old) > .02: matches.append(e)
-                            if len(matches) == 1: matched=matches[0]; break
-                            time.sleep(.1)
-                        if matched is None: raise ValueError('Automatic pairing was ambiguous. Keep the standard grey pointer and all new Safari sharing boards visible; pairing one new phone at a time avoids ambiguity')
-                        guard()
-                        matched.bind(peer)
-                    finally: self.radio.release(peer)
-                if not engine.peer: raise ValueError('No matching Bluetooth peer found for this capture')
-                return engine.peer
-            finally:
-                for e in active: e.open_board(False)
+        # The owner chose this exact Bluetooth peer before receiving a capture link.
+        # Never probe/rebind a different phone, and never hold a global action lock.
+        if engine.closed: raise ValueError('Device removed or control closed')
+        if not engine.peer:
+            raise ValueError('Bluetooth binding required. Remove this unbound record and use new --bt to select a connected iPhone')
+        peers = self.radio.peers()
+        if not any(p['id'] == engine.peer and set(p['reports']) == {1, 2} for p in peers):
+            raise ValueError('Bluetooth HID connection required for this phone; reconnect it in AssistiveTouch')
+        return engine.peer
 
+
+_UNSET_PEER = object()
 
 
 class Control:
-    def __init__(self, pairing, directory):
+    def __init__(self, pairing, directory, peer=_UNSET_PEER):
         self.pairing, self.radio = pairing, pairing.radio
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         self.path = self.directory/'calibration.json'
         saved = json.loads(self.path.read_text()) if self.path.exists() else {}
-        self.peer, self.calibration = saved.get('peer'), saved.get('calibration')
+        self.peer = saved.get('peer') if peer is _UNSET_PEER else peer
+        self.calibration = saved.get('calibration') if saved.get('peer') == self.peer else None
         self.condition = threading.Condition()
         self.input_lock = threading.Lock()
         self.jpeg, self.at, self.frame_id = b'', 0, None
@@ -131,11 +74,11 @@ class Control:
             if self.closed: raise ValueError('Device removed or control closed')
             atomic_json(self.path, dict(peer=self.peer, calibration=self.calibration))
     def bind(self, peer):
-        for other in self.pairing.engines:
-            if other is not self and other.peer==peer:
-                if other.is_fresh(): raise ValueError('This phone is already associated with another active screen share')
-                other.peer=None; other.calibration=None; other.save()
-        self.peer=peer; self.calibration=None; self.save()
+        if self.peer and self.peer != peer: raise ValueError('A device cannot switch Bluetooth phones; remove and add it again')
+        with self.pairing.lock:
+            if any(e is not self and e.peer == peer and not e.closed for e in self.pairing.engines):
+                raise ValueError('Bluetooth phone already bound to another device')
+            self.peer=peer; self.calibration=None; self.save()
     def is_fresh(self): return bool(not self.closed and self.at and time.monotonic()-self.at <= 5)
 
     def ingest(self, jpeg):
@@ -311,12 +254,16 @@ class Control:
             return dict(ok=True)
         if operation=='stop_control': return self.stop_capture()
         if operation=='get_device_status':
-            peers=self.radio.peers()
-            return dict(ok=True,status=dict(connected=self.peer in [p['id'] for p in peers],peer=self.peer,
-                        calibrationReady=bool(self.calibration),captureActive=self.is_fresh(),peers=peers),message=self.label)
+            error = ''
+            try: peers = self.radio.peers()
+            except (OSError, ValueError) as failure: peers, error = [], str(failure)
+            connected = any(p['id'] == self.peer and set(p['reports']) == {1, 2} for p in peers)
+            return dict(ok=True,status=dict(connected=connected, bluetooth_connected=connected, bluetooth_error=error,
+                        peer=self.peer, calibrationReady=bool(self.calibration),captureActive=self.is_fresh()),message=self.label)
         self.sending_generation=self.generation
         try:
             self.fresh()
+            self.pairing.associate(self)
             if operation in ('prepare_session','pointer_quick_probe'): self.calibration=None
             if operation in ('ensure_session','prepare_session','pointer_quick_probe'): self.ready()
             elif operation=='set_page_board': self.open_board(bool(args.get('aim')))

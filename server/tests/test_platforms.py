@@ -71,6 +71,16 @@ class BlueZTests(unittest.TestCase):
             if short == '2a4e':
                 with self.assertRaises(DBusError): method(char, b'\0', {})
 
+    def test_read_reports_are_scoped_to_the_requesting_peer(self):
+        from oiu.platforms.bluez import Characteristic, Service
+        from dbus_fast import Variant
+        char=Characteristic(types.SimpleNamespace(seen_peers=set()),Service('/test'),0,'2a4d',[],bytes(4),2)
+        char.peer_values={'/a':bytes([1,2,3,4]),'/b':bytes([0,9,8,7])}
+        read=next(m.fn for m in char._get_methods(char) if m.name=='ReadValue')
+        self.assertEqual(read(char,{'device':Variant('o','/a')}),bytes([1,2,3,4]))
+        self.assertEqual(read(char,{'device':Variant('o','/b')}),bytes([0,9,8,7]))
+        self.assertEqual(read(char,{}),bytes(4))
+
     def test_per_peer_channel_does_not_broadcast_and_legacy_ambiguity_fails(self):
         from oiu.platforms.bluez import BlueZRadio
         async def check():
@@ -83,7 +93,7 @@ class BlueZTests(unittest.TestCase):
             local,remote=socket.socketpair(socket.AF_UNIX,socket.SOCK_SEQPACKET if sys.platform=='linux' else socket.SOCK_DGRAM)
             local.setblocking(False); remote.setblocking(False)
             events=[]
-            char=types.SimpleNamespace(channels={peers[0]:local},notifying=True,value=b'',emit_properties_changed=events.append)
+            char=types.SimpleNamespace(channels={peers[0]:local},peer_values={},notifying=True,value=b'',emit_properties_changed=events.append)
             radio.reports={('/org/bluez/hci0',2):char}
             try:
                 await radio.notify(peers[0],2,b'\0\x10\0\0')
@@ -114,7 +124,8 @@ class WindowsContractTests(unittest.TestCase):
                 descriptors.append((id_, params))
                 return types.SimpleNamespace(error=success)
             char = types.SimpleNamespace(create_descriptor_async=descriptor,
-                add_read_requested=lambda callback: 1, add_write_requested=lambda callback: 2)
+                add_read_requested=lambda callback: 1, add_write_requested=lambda callback: 2,
+                add_subscribed_clients_changed=lambda callback: 3)
             chars.append((id_, parameters, char))
             return types.SimpleNamespace(error=success, characteristic=char)
         provider = types.SimpleNamespace(service=types.SimpleNamespace(create_characteristic_async=characteristic),
@@ -136,7 +147,7 @@ class WindowsContractTests(unittest.TestCase):
         exec(compile(ast.Module(body=[start], type_ignores=[]), '<actual-winrt-start>', 'exec'), namespace)
         async def check():
             radio = types.SimpleNamespace(reports={}, values={}, events=[], loop=asyncio.get_running_loop(),
-                _advertisement=lambda *args: None, _read=lambda *args: None, _write=lambda *args: None)
+                _advertisement=lambda *args: None, _read=lambda *args: None, _write=lambda *args: None, _subscribers=lambda *args:None)
             await namespace['start'](radio)
         asyncio.run(check())
         self.assertEqual(service_ids, [uuid.UUID(HID_UUID)])
@@ -150,6 +161,31 @@ class WindowsContractTests(unittest.TestCase):
         self.assertTrue(all(str(id_) == full_uuid('2908') for id_, _ in descriptors))
         self.assertTrue(all(params.read_protection_level == 'encrypted' for _, params in descriptors))
         self.assertEqual([params.characteristic_properties for _, params, _ in chars[-2:]], [18, 18])
+
+    def test_winrt_read_uses_the_request_session_and_disconnect_clears_only_that_peer(self):
+        source=(Path(__file__).resolve().parents[1]/'oiu/platforms/windows.py').read_text()
+        cls=next(n for n in ast.parse(source).body if isinstance(n,ast.ClassDef) and n.name=='WindowsRadio')
+        methods=[n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name in ('_read','_subscribers')]
+        namespace={'buffer':lambda value:value}
+        exec(compile(ast.Module(body=methods,type_ignores=[]),'<actual-winrt-read>','exec'),namespace)
+        async def check():
+            received=[];pending=[]
+            char=types.SimpleNamespace(subscribed_clients=[])
+            radio=types.SimpleNamespace(loop=asyncio.get_running_loop(),reports={2:char},values={},
+                report_values={('a',2):bytes([1,2,3,4]),('b',2):bytes([0,8,7,6])},
+                _event=lambda coroutine,deferral:pending.append(coroutine))
+            for peer in ('a','b'):
+                async def request(): return types.SimpleNamespace(offset=0,respond_with_value=received.append)
+                args=types.SimpleNamespace(session=types.SimpleNamespace(device_id=types.SimpleNamespace(id=peer)),
+                    get_request_async=request,get_deferral=lambda:None)
+                namespace['_read'](radio,char,args)
+                await pending.pop()
+            self.assertEqual(received,[bytes([1,2,3,4]),bytes([0,8,7,6])])
+            char.subscribed_clients=[types.SimpleNamespace(session=types.SimpleNamespace(device_id=types.SimpleNamespace(id='b')))]
+            namespace['_subscribers'](radio,char,None)
+            await asyncio.sleep(0)
+            self.assertEqual(radio.report_values,{('b',2):bytes([0,8,7,6])})
+        asyncio.run(check())
 
     def test_control_write_validation_and_command_response_rules(self):
         source = (Path(__file__).resolve().parents[1]/'oiu/platforms/windows.py').read_text()
@@ -193,7 +229,7 @@ class WindowsContractTests(unittest.TestCase):
             async def notify(payload,client):
                 calls.append((payload,client));return types.SimpleNamespace(status='success')
             char=types.SimpleNamespace(subscribed_clients=[a,b],notify_value_async=notify)
-            radio=types.SimpleNamespace(reports={1:char})
+            radio=types.SimpleNamespace(reports={1:char},report_values={})
             await namespace['notify'](radio,'a',1,bytes(8))
             self.assertIs(calls[0][1],a)
             with self.assertRaises(OSError): await namespace['notify'](radio,'missing',1,bytes(8))
@@ -213,3 +249,46 @@ class MacHIDContractTests(unittest.TestCase):
             self.assertIn('onSubscribedCentrals: [', source)
         self.assertIn('case "2A4B": value = BLEHIDPeripheral.reportDescriptor', headless)
         self.assertIn('value: nil, permissions: [.readEncryptionRequired]', headless)
+
+
+class BluetoothNameTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec('dbus_fast'), 'dbus-fast required')
+    def test_bluez_names_are_matched_by_exact_device_path(self):
+        from oiu.platforms.bluez import BlueZRadio
+        from dbus_fast import Variant
+        a, b = '/org/bluez/hci0/dev_A', '/org/bluez/hci0/dev_B'
+        async def objects():
+            return {peer: {'org.bluez.Device1': {'Connected':Variant('b',True),'Paired':Variant('b',True),
+                'Name':Variant('s',name)}} for peer,name in ((a,'Real A'),(b,'Real B'))}
+        async def check():
+            radio=object.__new__(BlueZRadio)
+            radio.manager=types.SimpleNamespace(call_get_managed_objects=objects)
+            radio.seen_peers={a,b}
+            radio.reports={('/org/bluez/hci0',r):types.SimpleNamespace(channels={a:True,b:True},notifying=False) for r in (1,2)}
+            peers=await radio.get_peers()
+            self.assertEqual({p['id']:p['name'] for p in peers},{a:'Real A',b:'Real B'})
+        asyncio.run(check())
+
+    def test_winrt_resolves_names_using_each_exact_subscriber_device_id(self):
+        source=(Path(__file__).resolve().parents[1]/'oiu/platforms/windows.py').read_text()
+        cls=next(n for n in ast.parse(source).body if isinstance(n,ast.ClassDef) and n.name=='WindowsRadio')
+        methods=[n for n in cls.body if isinstance(n,ast.AsyncFunctionDef) and n.name in ('get_peers','_resolve_name')]
+        looked_up=[]
+        async def device(id_):
+            looked_up.append(id_)
+            return types.SimpleNamespace(name='Real '+id_,close=lambda:None)
+        namespace={'asyncio':asyncio,'BluetoothLEDevice':types.SimpleNamespace(from_id_async=device)}
+        exec(compile(ast.Module(body=methods,type_ignores=[]),'<actual-winrt-peers>','exec'),namespace)
+        async def check():
+            clients=[types.SimpleNamespace(session=types.SimpleNamespace(device_id=types.SimpleNamespace(id=id_))) for id_ in ('a','b')]
+            radio=types.SimpleNamespace(error=None,peer_names={},name_pending=set(),tasks=set(),
+                reports={r:types.SimpleNamespace(subscribed_clients=clients) for r in (1,2)})
+            radio._resolve_name=types.MethodType(namespace['_resolve_name'],radio)
+            peers=await namespace['get_peers'](radio)
+            self.assertEqual([p['name_source'] for p in peers],['fallback','fallback'])
+            self.assertEqual(looked_up,[])  # Status did not wait on either name lookup.
+            await asyncio.gather(*radio.tasks)
+            peers=await namespace['get_peers'](radio)
+            self.assertEqual([(p['id'],p['name'],p['reports']) for p in peers],[('a','Real a',[1,2]),('b','Real b',[1,2])])
+            self.assertEqual(looked_up,['a','b'])
+        asyncio.run(check())

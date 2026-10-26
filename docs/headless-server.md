@@ -17,92 +17,101 @@ The defaults are:
 | `http://127.0.0.1:27893` | Authenticated operator grid/API; no desktop CA trust needed |
 | `http://LAN_IP:27892/root-ca.cer` | Public CA certificate only; no control, screens or tokens |
 
-Private operator links carry the login credential in the URL fragment, which is consumed
-and removed by the web page. The generic private sharing invitation enrolls each browser
-with its own ID/token. Safari localStorage retains that capture identity across visits;
-private browsing, cleared storage or a changed server origin can create a new slot. An
-inactive old slot's peer can be reassociated automatically; an active share's peer cannot
-be silently stolen. Named links remain available with `add` or the UI's new-phone form.
+## Bluetooth-first onboarding, including two phones
 
-Before trusting the CA on an iPhone, compare its SHA-256 fingerprint with the server's
-terminal output, or transfer it over an already trusted channel. Install the profile and
-enable trust explicitly in iPhone settings. The bootstrap HTTP endpoint transports only
-public certificate bytes; it cannot establish authenticity by itself. Private keys are never
-served. The localhost UI avoids a host-browser trust step; LAN operator browsers must trust
-the CA too. IP changes renew the leaf certificate while preserving the trusted CA. CA
-expiry/mismatched key material is reported rather than silently replacing the trust anchor.
+Run setup, then `open-iphone-use serve` (or `serve --daemon`). Pair each unlocked iPhone
+in AssistiveTouch → Devices → Bluetooth Devices. The server lists only live HID peers
+with both keyboard and mouse subscriptions as candidates. A remembered bond alone is
+insufficient. Use `open-iphone-use bluetooth`, then `new --bt <id>`; `new` chooses the
+only available phone automatically, or prompts on an interactive terminal when several
+are available. Noninteractive callers must specify `--bt` when the choice is ambiguous.
+The web UI offers the same Bluetooth-connected list; free-text names are not accepted.
 
-Override addresses/ports only when needed:
+The device is persisted with that exact `bt_id`, the Bluetooth name (or a marked fallback),
+a random capture credential and a private URL. `new` renders a QR code using the vendored
+MIT Project Nayuki encoder, with no new runtime dependency. Scan it on that same iPhone.
+`link <device>` reprints the URL/QR after terminal closure or server restart. Install the
+public CA on the phone once, compare the printed SHA-256 fingerprint, and explicitly
+approve full trust before Safari sharing. Only the public certificate is downloadable;
+private keys and capture credentials stay private. Localhost UI login uses an operator
+credential in a fragment that the page consumes/removes.
+
+Repeat this sequence for two iPhones. Devices never change peers because another phone
+connected or a share stopped. There is no screen-based guessing or global preparation
+lock. Each phone has its own calibration board, reports, input lock, frame stream and
+cancellation generation. The first web tap calls `ensure_session` for that phone only;
+CLI/MCP can request preparation explicitly. The measured two-click pointer calibration
+still requires Safari's green board, a visible pointer and authenticated tap feedback.
+A disconnected peer is reported separately from a paused screen; actions require both
+live HID and fresh capture. Re-pairing with a different OS identifier requires remove/new.
+
+Names on macOS use exact-UUID CoreBluetooth peripheral retrieval, then a bounded reverse
+connection/GAP Device Name (2A00) read when a matching peripheral is available. CBCentral
+itself has no name or public address. IOBluetooth classic-device addresses and profiler
+names cannot safely be matched to an opaque central UUID, especially with two iPhones;
+these are not guessed. iOS need not expose a reverse-role GAP service. The fallback
+`iPhone (abcd)` is explicitly marked `name_source: fallback`. Pair/add one phone at a
+time if fallback labels cannot be identified. Linux uses Device1 Name/Alias; Windows
+resolves BluetoothLEDevice.Name from each exact subscribed-client device ID.
+
+## Background server
 
 ```sh
-open-iphone-use serve --host 192.168.1.20 --port 27891 --ui-port 27893 --certificate-port 27892
-open-iphone-use serve --cert /private/server.pem --key /private/server.key
-open-iphone-use serve --no-print-secrets      # log/service use; retrieve login with token
-open-iphone-use --state /private/phone-state devices
+open-iphone-use serve --daemon
+open-iphone-use bluetooth
+open-iphone-use new                  # interactive pick, or automatic if exactly one
+open-iphone-use new --bt PEER_ID
+open-iphone-use devices              # JSON: names, bt_id, bluetooth_connected, sharing_active
+open-iphone-use link DEVICE_ID
+open-iphone-use remove DEVICE_ID
+open-iphone-use stop
 ```
 
-`OIU_STATE` selects a custom state directory. `--url` overrides CLI discovery; by default
-CLI/MCP read private `connection.json` and connect to the loopback API. Explicit custom
-HTTPS endpoints use normal trust (`SSL_CERT_FILE` can supply a private CA); no TLS bypass
-is provided. `--no-certificate-server` disables public certificate download. For local
-software development only, `serve --local-http --capture-only` explicitly disables TLS
-and HID; this is a diagnostic mode, not an automatically selected fallback.
+Daemon mode detaches on POSIX/Windows, retains the state lease, and writes a 0600 private
+`server.log` without printing sharing/operator credentials into that log. Startup waits
+for a matching authenticated instance identity; duplicate starts fail. `stop` uses the
+operator-authenticated shutdown endpoint, never a potentially reused PID from disk.
+This is persistent background execution until stopped/logout/reboot, not an installed
+launchd/systemd/Windows startup job. Run foreground once if host Bluetooth permission
+needs an owner prompt. On headless Linux the pairing agent still needs the interactive
+owner terminal or the system Bluetooth UI; daemonization never auto-approves pairing.
 
-## Pair and prepare
+`OIU_STATE` selects the state directory. CLI/MCP discover loopback `connection.json`;
+`--url` overrides it. Auto LAN mode binds capture and CA-download listeners to all IPv4
+interfaces. The UI/setup endpoint checks the current LAN IP, reloads a renewed leaf under
+the same CA and updates links. Reopen a changed link on each iPhone. Explicit `--host`
+and custom `--cert`/`--key` stay fixed. `--local-http --capture-only` is diagnostic only:
+it offers no Bluetooth candidates and cannot add phones.
 
-Enable AssistiveTouch and pair each phone to the host's advertised HID device through
-owner-controlled settings. Keep the phone unlocked. Open the same private HTTPS invitation
-in Safari on each phone, approve sharing, and keep Safari visible for initial preparation.
-Tiles appear immediately for every registered phone, with a waiting placeholder until its
-first upload; `devices` lists live, paused and enrolled slots.
+## Remove a phone and API
 
-The first tap on a tile automatically calls `ensure_session` to associate the screen
-with an available Bluetooth peer. CLI/MCP can also request preparation explicitly. For one
-new peer and one new capture the association is one-to-one. With several new peers it
-opens the calibration boards and correlates targeted pointer movement with authenticated
-Safari hover feedback or visible pointer changes in the corresponding captures. All new
-candidate captures must show their boards. Ambiguity fails with actionable instructions;
-it never chooses an arbitrary peer or sends a blind click. Re-pairing can be reassociated
-without editing internal IDs. Pairing new phones one at a time is a recovery path when
-hover feedback or a recognizable grey pointer is unavailable.
+Confirm Remove next to a tile's Share/Copy/QR area, run `remove <device>` (or
+`remove --device <id>`), or use MCP `remove_device`. Revocation is persisted, running/queued
+input canceled, frames cleared, control detached and its calibration deleted. Old tokens
+fail even after restart; other devices and OS Bluetooth bonds remain intact. Failed state
+writes preserve the record; cleanup errors after revocation are returned as warnings.
+A peer being removed cannot be re-added until its cleanup has drained.
 
-The common control engine measures two board clicks using the same fast16-sized motion
-pattern as the legacy Mac workflow. It requires the green border, a visible white board,
-a single grey pointer, fresh screenshots and matching tap feedback before saving the
-mapping. Coordinates are converted from Safari viewport fractions to captured-screen
-fractions using the measured border. Calibration is stored per device/peer, motion version
-and aspect ratio. It is a two-point estimate, not a guarantee at every pixel. Screen
-rotation, changed pointer settings or suspect accuracy require preparation again.
+Operator-authenticated endpoints:
 
-The grid offers live-screen taps, sharing-link controls and Remove. Home, typing,
-scroll, explicit preparation and release input are available through CLI/MCP. On each action the server
-checks a frame ID from that device within five seconds, serializes input, releases on
-failure/cancellation, waits for a new frame and returns an image to MCP. Stop bypasses
-queued work. Capture expiry releases held keys/buttons. Owner unlocking, certificate trust,
-pairing, iOS sharing and protected-screen restrictions are preserved.
+- `GET /api/bluetooth`: connected candidates, `id`, name/source, reports, availability.
+- `POST /api/devices` with `{"bt_id":"..."}`: create only for that connected, unclaimed peer.
+- `GET /api/devices`: names, Bluetooth/sharing status, exact binding and private capture path.
+- `DELETE /api/devices/<id>`: remove/revoke.
+- `GET /api/setup`: current capture origin and public CA metadata.
+- `GET /api/health`, `POST /api/shutdown`: authenticated service lifecycle.
 
-## Remove a phone
-
-Confirm **Remove** next to a tile's Share/Copy/QR area, run
-`open-iphone-use remove --device <id>`, or use the portable MCP `remove_device` tool
-with an explicitly chosen `device_id`. The API is `DELETE /api/devices/<id>` with the
-operator Bearer credential; a capture token or shared invitation cannot delete phones.
-
-Removal persists revocation, cancels running and queued actions, drops in-memory frames,
-detaches the phone's pairing/calibration engine and deletes its saved calibration. Old
-capture links/uploads are rejected even after restart. Other phones, the shared radio,
-the invitation for enrolling new phones and OS Bluetooth bonds remain intact. Removing
-an unknown/already removed ID returns 404. A failed state write preserves the phone;
-if radio cleanup fails after revocation, the response reports cleanup warnings while the
-identity remains deleted. Removing a phone is separate from forgetting its Bluetooth
-pairing in the owner's OS settings.
+Legacy `/join` and `/api/enroll` return 410: an invitation can no longer create unbound
+phones. Existing records with an exact saved calibration peer migrate to that binding;
+ambiguous/unbound records remain visible but cannot control a phone. Remove/new those
+records. Persisted bindings are never reassigned by names or screen activity.
 
 ## macOS implementation
 
 The native Swift helper runs with `--radio` and owns one CoreBluetooth peripheral manager,
-one HID service and independent subscriptions/generations per central. Every update names
-one concrete central. Per-peer release cancels its backpressured sends without releasing
-other phones. The helper has embedded Bluetooth purpose strings and exits/releases input
+one HID service and independent subscriptions, FIFO queues and last-report state per central. Every update names
+one concrete central. Readiness callbacks retry each central independently; blocked peers do not gate others.
+Per-peer release cancels only that phone’s backpressured sends. The helper has embedded Bluetooth purpose strings and exits/releases input
 when its parent server exits. Python supplies capture/calibration and the web UI; no
 SwiftUI lifecycle or app bundle is needed. Existing standalone app/controller/MCP behavior
 is preserved separately.
@@ -165,7 +174,7 @@ document the underlying interfaces, not verified iPhone compatibility.
 Register the installed CLI with `args: ["mcp"]`. List devices, choose an explicit ID,
 read its screenshot, then prepare/act using its fresh frame ID. Stop requires only the
 ID. The portable MCP surface covers keyboard, pointer, calibration, scroll, swipe/feed
-and release, plus explicit phone removal. Advanced legacy diagnostic/retry aliases remain available only from the
+and release, plus list_bluetooth_candidates/create_device/remove_device. Advanced legacy diagnostic/retry aliases remain available only from the
 standalone Swift helper. No model or API key is embedded in this project.
 
 Each device stores its own capture credential, frame history, peer mapping/calibration,

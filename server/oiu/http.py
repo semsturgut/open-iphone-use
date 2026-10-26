@@ -131,17 +131,8 @@ class Handler(BaseHTTPRequestHandler):
                 file = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/qrcode.js": "qrcode.js"}[path.path]
                 mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css", "/qrcode.js": "text/javascript"}[path.path]
                 return self.reply((WEB / file).read_bytes(), mime=mime)
-            if path.path == "/join" and not post:
-                token = parse_qs(path.query).get('token', [''])[0]
-                if not secrets.compare_digest(token, registry.invite_token): raise PermissionError('Invalid invitation')
-                return self.reply((WEB/'join.html').read_bytes(), mime='text/html')
-            if path.path == '/api/enroll' and post:
-                token = self.headers.get('X-Open-iPhone-Use-Invite', '')
-                if not secrets.compare_digest(token, registry.invite_token): raise PermissionError('Invalid invitation')
-                data = json.loads(self.body(4096))
-                with registry.lock:
-                    device = registry.create(data.get('name', f'iPhone {len(registry.devices)+1}'))
-                return self.reply(dict(capture_path=f'/capture?token={device.token}'))
+            if path.path in ('/join', '/api/enroll'):
+                return self.reply({'error': 'Bluetooth-first onboarding required. Pair in AssistiveTouch, then select this phone in new or the operator UI.'}, 410)
             if path.path == "/capture" or path.path in ("/api/frame", "/api/stop", "/api/tap", "/api/calibrate", "/api/pointer"):
                 token = (parse_qs(path.query).get("token", [""])[0] if path.path == "/capture"
                          else self.headers.get("X-Open-iPhone-Use-Token", ""))
@@ -173,15 +164,26 @@ class Handler(BaseHTTPRequestHandler):
             self.admin()
             if path.path == '/api/setup' and not post:
                 origin = registry.capture_origin() if hasattr(registry, 'capture_origin') else getattr(registry, 'public_url', '')
-                return self.reply(dict(join_path=f'/join?token={registry.invite_token}',capture_origin=origin))
+                certificate_url = None
+                if getattr(registry, 'certificate_port', None):
+                    certificate_url = f'http://{urlsplit(origin).hostname}:{registry.certificate_port}/root-ca.cer'
+                return self.reply(dict(bluetooth_required=True,capture_origin=origin,certificate_url=certificate_url,
+                                       ca_fingerprint=getattr(registry, 'ca_fingerprint', None)))
             if path.path == "/api/devices":
                 if post:
-                    device = registry.create(json.loads(self.body(4096))["name"])
-                    return self.reply(dict(device_id=device.id, capture_path=f"/capture?token={device.token}"))
-                # Capture links are credentials: expose them only after admin().
-                with registry.lock:
-                    return self.reply([dict(d.summary(), capture_path=f"/capture?token={d.token}")
-                                       for d in registry.devices.values()])
+                    device = registry.create_bluetooth(json.loads(self.body(4096)).get("bt_id"))
+                    return self.reply(dict(device_id=device.id, name=device.name, bt_id=device.bt_id, capture_path=f"/capture?token={device.token}"))
+                return self.reply(registry.list(include_links=True))
+            if path.path == '/api/bluetooth' and not post:
+                return self.reply(registry.candidates())
+            if path.path == '/api/health' and not post:
+                return self.reply(dict(ok=True, instance_id=getattr(registry, 'instance_id', '')))
+            if path.path == '/api/shutdown' and post:
+                shutdown = getattr(registry, 'shutdown', None)
+                if shutdown is None: raise ValueError('Service shutdown unavailable')
+                self.reply(dict(ok=True, message='Server stopping'))
+                threading.Thread(target=shutdown, daemon=True).start()
+                return
             parts = path.path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "devices"]:
                 device = registry.devices[parts[2]]
@@ -201,11 +203,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(device.action(data["operation"], data.get("arguments", {})))
                 if not post and parts[3] == "status":
                     result = device.backend.request("get_device_status")
-                    return self.reply(dict(device=device.summary(), backend=result))
+                    summary = next(d for d in registry.list() if d['device_id'] == device.id)
+                    return self.reply(dict(device=summary, backend=result))
             self.reply({"error": "Not found"}, 404)
         except PermissionError as error:
             self.reply({"error": str(error)}, 401)
-        except KeyError:
+        except (KeyError, StopIteration):
             self.reply({"error": "Unknown device or missing field"}, 404)
         except (ValueError, TypeError, OSError) as error:
             self.reply({"error": str(error)}, 400)

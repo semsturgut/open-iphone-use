@@ -7,6 +7,7 @@ import signal
 import ssl
 import sys
 import threading
+import uuid
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
@@ -36,6 +37,19 @@ def call(args,path,data=None,method=None):
         raise ValueError(message) from None
 
 
+def show_link(args, device):
+    from .qr import terminal
+    setup=call(args,'/api/setup')
+    origin=setup['capture_origin'] or connection(args)[0]
+    url=origin+device['capture_path']
+    print(f"{device['name']} [{device['device_id']}]\n{url}")
+    print(terminal(url,ansi=sys.stdout.isatty()))
+    if setup.get('certificate_url'):
+        print('First use: install the public CA on the iPhone, verify SHA-256 and enable full trust.')
+        print(setup['certificate_url'] + '\nCA SHA-256: ' + setup['ca_fingerprint'])
+    print('Scan on this Bluetooth-paired iPhone. The server must remain running; Bluetooth HID is required.')
+
+
 def serve(args,parser):
     from .bootstrap import lan_address,certificates,LANOrigin
     from .control import Pairing,Control,atomic_json
@@ -49,15 +63,25 @@ def serve(args,parser):
     registry=None; radio=None; server=None; public_server=None; local_server=None; local_thread=None
     try:
         registry=Registry(args.state)
+        registry.instance_id=os.environ.get("OIU_DAEMON_START_ID") or uuid.uuid4().hex
         ca=public=None
         cert,key=args.cert,args.key
         if not args.local_http and not cert: cert,key,ca,public=certificates(args.state,host)
         context=None if args.local_http else tls_context(cert,key)
         if not args.capture_only:
             radio=create_radio(args.state,args.helper)
+            registry.radio=radio
             pairing=Pairing(radio)
-            registry.backend_factory=lambda device: Control(pairing,registry.directory/device.id)
+            # Migrate only an already saved exact peer; never choose an arbitrary phone.
+            claimed = set()
+            for device in registry.devices.values():
+                saved = registry.directory/device.id/'calibration.json'
+                if device.bt_id is None and saved.exists(): device.bt_id=json.loads(saved.read_text()).get('peer')
+                if device.bt_id in claimed: device.bt_id=None
+                elif device.bt_id: claimed.add(device.bt_id)
+            registry.backend_factory=lambda device: Control(pairing,registry.directory/device.id,peer=device.bt_id)
             for device in registry.devices.values(): device.backend=registry.backend_factory(device)
+            registry.save()
         # Auto mode follows interface changes; explicit --host remains a fixed bind.
         follow_lan = not args.local_http and not args.host and not args.cert
         bind_host = '0.0.0.0' if follow_lan else host
@@ -71,13 +95,16 @@ def serve(args,parser):
             local_thread.start()
             ui_url=f'http://127.0.0.1:{local_server.server_port}'
         def save_origin(origin):
-            atomic_json(registry.directory/'connection.json',dict(url=ui_url,ca=None if local_server else ca,public_url=origin))
+            atomic_json(registry.directory/'connection.json',dict(url=ui_url,ca=None if local_server else ca,public_url=origin,instance_id=registry.instance_id))
             registry.public_url=origin
         save_origin(url)
         if follow_lan:
             registry.capture_origin=LANOrigin(registry.directory,host,server.server_port,context,save_origin)
         if public and not args.no_certificate_server:
             public_server=CertificateServer((bind_host,args.certificate_port),public)
+            registry.certificate_port=public_server.server_port
+            registry.ca_fingerprint=hashlib.sha256(Path(public).read_bytes()).hexdigest().upper()
+        registry.shutdown=server.shutdown
         def stop(*_): threading.Thread(target=server.shutdown,daemon=True).start()
         signal.signal(signal.SIGINT,stop); signal.signal(signal.SIGTERM,stop)
         print(f'Open iPhone Use: {url}',flush=True)
@@ -93,7 +120,7 @@ def serve(args,parser):
         print('Pair on each iPhone: Settings > Accessibility > Touch > AssistiveTouch > Devices > Bluetooth Devices > Open iPhone Use (Windows may show the PC name). Keep the phone unlocked.',flush=True)
         if not args.no_print_secrets:
             print(f'Web UI (private operator link): {ui_url}/#{registry.admin_token}',flush=True)
-            print(f'Open in Safari on EACH iPhone: {url}/join?token={registry.invite_token}',flush=True)
+            print('Pair over Bluetooth, then run open-iphone-use new to get that phone’s private link and QR.',flush=True)
         else: print(f'Web UI: {ui_url} — use open-iphone-use token to log in; sharing links appear there.',flush=True)
         print('Approve Start sharing in Safari. Tap a live screen in the grid; the first tap prepares its control session with Safari visible. No pairing UUID configuration is needed.',flush=True)
         server.serve_forever()
@@ -113,6 +140,7 @@ def main():
     parser.add_argument('--url',default=None)
     sub=parser.add_subparsers(dest='command',required=True)
     start=sub.add_parser('serve')
+    start.add_argument('--daemon',action='store_true',help='Run the server in the background until stop')
     start.add_argument('--host',help='LAN IPv4 address; detected automatically')
     start.add_argument('--port',type=int,default=27891)
     start.add_argument('--ui-port',type=int,default=27893)
@@ -123,10 +151,16 @@ def main():
     start.add_argument('--certificate-port',type=int,default=27892)
     start.add_argument('--no-certificate-server',action='store_true')
     start.add_argument('--no-print-secrets',action='store_true')
-    sub.add_parser('devices'); sub.add_parser('token'); sub.add_parser('mcp')
-    add=sub.add_parser('add'); add.add_argument('name')
+    sub.add_parser('devices'); sub.add_parser('token'); sub.add_parser('mcp'); sub.add_parser('stop')
+    sub.add_parser('bluetooth',help='List Bluetooth-connected HID phones')
+    for name in ('new','add'):
+        add=sub.add_parser(name,help='Select a connected Bluetooth phone and print its private link + QR')
+        add.add_argument('--bt',help='Exact Bluetooth peer ID (otherwise choose interactively)')
+    link=sub.add_parser('link',help='Show an existing phone sharing link + QR')
+    link.add_argument('device')
     remove=sub.add_parser('remove',help='Remove a phone and revoke its sharing link')
-    remove.add_argument('--device',required=True)
+    remove.add_argument('device_pos',nargs='?')
+    remove.add_argument('--device')
     status=sub.add_parser('status'); status.add_argument('--device',required=True)
     act=sub.add_parser('action'); act.add_argument('--device',required=True)
     act.add_argument('operation'); act.add_argument('--arguments',default='{}')
@@ -136,19 +170,45 @@ def main():
     register.add_argument('--skill',help='Skill source path (setup supplies its checked-out copy)')
     args=parser.parse_args()
     try:
-        if args.command=='serve': serve(args,parser)
+        if args.command=='serve':
+            if args.daemon:
+                from .service import daemon
+                print(json.dumps(daemon(args,sys.argv[1:],call),indent=2))
+            else: serve(args,parser)
+        elif args.command=='stop':
+            from .service import stop
+            print(json.dumps(stop(args,call),indent=2))
         elif args.command=='register-agents':
             from .registrations import configure
             configure(Path(args.home),Path(sys.executable).parent/('open-iphone-use.exe' if os.name=='nt' else 'open-iphone-use'),args.skill,args.uninstall)
         elif args.command=='token': print(json.loads((Path(args.state)/'state.json').read_text())['admin_token'])
         elif args.command=='devices': print(json.dumps(call(args,'/api/devices'),indent=2))
-        elif args.command=='add':
-            result=call(args,'/api/devices',{'name':args.name})
-            origin=call(args,'/api/setup').get('capture_origin') or connection(args)[0]
-            print(json.dumps(dict(device_id=result['device_id'],capture_url=origin+result['capture_path']),indent=2))
+        elif args.command=='bluetooth': print(json.dumps(call(args,'/api/bluetooth'),indent=2))
+        elif args.command in ('new','add'):
+            candidates=[p for p in call(args,'/api/bluetooth') if p['available']]
+            if not candidates: raise ValueError('No unadded Bluetooth HID phones. Pair/connect in AssistiveTouch first; both keyboard and pointer subscriptions are required.')
+            if args.bt:
+                selected=next((p for p in candidates if p['id']==args.bt),None)
+                if selected is None: raise ValueError('Selected Bluetooth phone is disconnected or already added')
+            elif len(candidates)==1: selected=candidates[0]
+            else:
+                for i,p in enumerate(candidates,1): print(f"{i}. {p['name']} [{p['id']}]",file=sys.stderr)
+                if not sys.stdin.isatty(): raise ValueError('Several phones connected; choose explicitly with new --bt <id>')
+                try: choice=int(input('Choose phone number: '))
+                except (ValueError,EOFError): raise ValueError('Invalid selection') from None
+                if not 1<=choice<=len(candidates): raise ValueError('Invalid selection')
+                selected=candidates[choice-1]
+            result=call(args,'/api/devices',{'bt_id':selected['id']})
+            show_link(args,result)
+        elif args.command=='link':
+            result=next((d for d in call(args,'/api/devices') if d['device_id']==args.device),None)
+            if result is None: raise ValueError('Unknown device')
+            show_link(args,result)
         elif args.command=='remove':
-            if not args.device.isalnum(): raise ValueError('Invalid device ID')
-            print(json.dumps(call(args,f'/api/devices/{args.device}',method='DELETE'),indent=2))
+            device=args.device or args.device_pos
+            if not device or not device.isalnum(): raise ValueError('Choose a valid device ID')
+            if args.device and args.device_pos and args.device!=args.device_pos: raise ValueError('Conflicting device IDs')
+            print(json.dumps(call(args,f'/api/devices/{device}',method='DELETE'),indent=2))
         elif args.command=='status': print(json.dumps(call(args,f'/api/devices/{args.device}/status'),indent=2))
         elif args.command=='action':
             result=call(args,f'/api/devices/{args.device}/action',dict(operation=args.operation,arguments=json.loads(args.arguments)))

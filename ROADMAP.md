@@ -7,14 +7,14 @@ physical device evidence and release readiness are separate.
 ## Headless web preview
 
 - [x] CLI server, device enrollment/list/status/action commands and portable stdio MCP.
-- [x] Authenticated web grid; new device tiles appear on first upload.
+- [x] Authenticated web grid; Bluetooth-bound device tiles appear before the first upload.
 - [x] Separate device credentials, frame stores, queues, stale-frame guards and cancellation.
 - [x] Shared native Swift headless radio reusing the HID descriptor; legacy controller preserved.
 - [x] Optional Mac app web client without starting the local radio/receiver.
 - [x] Automatic local CA, renewable LAN HTTPS, localhost operator UI and public certificate bootstrap.
 - [x] Real encrypted BlueZ and WinRT HID services with targeted/guarded notification routing.
 - [x] Shared multi-central CoreBluetooth helper and common per-device control/calibration engine.
-- [x] Automatic browser enrollment and screen-to-peer association without UUID configuration.
+- [x] Bluetooth-first peer selection, persistent per-peer links and terminal QR onboarding.
 - [x] Idempotent POSIX/PowerShell setup, runtime/dependency installation, agent registration and uninstall.
 - [x] Automated multi-device transport/control-isolation tests and synthetic native-helper checks.
 - [ ] Physical Safari sharing, calibration and HID validation on the new headless path.

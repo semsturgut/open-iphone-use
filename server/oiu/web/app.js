@@ -71,14 +71,40 @@ function sharingLink(label, url) {
   return root;
 }
 $('login').onsubmit = event => {event.preventDefault(); $('error').textContent = ''; token = $('token').value; sessionStorage.setItem('oiu-token', token); refresh();};
-$('add').onsubmit = async event => {
-  event.preventDefault();
-  $('error').textContent = '';
-  try {
-    await api('/api/devices', {name: $('name').value});
-    $('name').value = ''; await refresh();
-  } catch (error) { failure(error); }
-};
+let candidateKey = '';
+const adding = new Set();
+function bluetoothCandidates(candidates) {
+  const key = JSON.stringify(candidates);
+  if (candidateKey === key) return;
+  candidateKey = key;
+  const rows = candidates.map(peer => {
+    const row = document.createElement('p');
+    const label = document.createElement('span'); label.textContent = `${peer.name} • Bluetooth HID connected${peer.name_source === 'fallback' ? ' (name unavailable)' : ''} `;
+    const button = document.createElement('button'); button.type = 'button';
+    button.textContent = peer.available ? 'Add phone' : 'Already added'; button.disabled = !peer.available || adding.has(peer.id);
+    button.onclick = async () => {
+      if (adding.has(peer.id)) return;
+      adding.add(peer.id); button.disabled = true;
+      try { await api('/api/devices', {bt_id: peer.id}); candidateKey = ''; await refresh(); }
+      catch (error) { failure(error); }
+      finally { adding.delete(peer.id); if (peer.available) button.disabled = false; }
+    };
+    row.append(label, button); return row;
+  });
+  if (!rows.length) { const empty = document.createElement('p'); empty.textContent = 'No Bluetooth HID phones connected. Pair/connect an iPhone first (keyboard and pointer).'; rows.push(empty); }
+  $('bluetooth-list').replaceChildren(...rows);
+}
+async function showFrame(t, frame) {
+  const bytes = Uint8Array.from(atob(frame.base64), c => c.charCodeAt(0));
+  const next = URL.createObjectURL(new Blob([bytes], {type: 'image/jpeg'}));
+  const img = t.root.querySelector('img'); img.src = next;
+  try { await img.decode(); }
+  catch (error) { URL.revokeObjectURL(next); throw error; }
+  if (t.removed) { URL.revokeObjectURL(next); return; }
+  img.hidden = false;
+  if (t.url) URL.revokeObjectURL(t.url);
+  t.url = next; t.frame = frame.frameID;
+}
 function tile(device) {
   const root = document.createElement('article'); root.className = 'phone';
   // Static markup only. Names, IDs and backend errors are always textContent.
@@ -104,11 +130,25 @@ function tile(device) {
     try {
       const result = await api(`/api/devices/${value.device.device_id}/action`, {operation, arguments: {expectedFrameID: value.frame, ...arguments_}});
       root.querySelector('.result').textContent = result.message || JSON.stringify(result);
-    } catch (error) { root.querySelector('.result').textContent = error.message; }
+      if (result.frame && !value.removed) await showFrame(value, result.frame);
+      return result;
+    } catch (error) { root.querySelector('.result').textContent = error.message; return null; }
   };
   const img = root.querySelector('img');
   // Prepare the HID session automatically before the first tap on this tile.
-  img.onclick = async event => {const r = img.getBoundingClientRect(); const point = {x: (event.clientX-r.left)/r.width, y: (event.clientY-r.top)/r.height}; if (!value.prepared) {await act('ensure_session'); value.prepared = true;} act('pointer_tap', point);};
+  img.onclick = async event => {
+    if (value.acting || !value.device.bluetooth_connected || value.removed) return;
+    value.acting = true;
+    try {
+      const r = img.getBoundingClientRect(), point = {x: (event.clientX-r.left)/r.width, y: (event.clientY-r.top)/r.height};
+      if (!value.prepared) {
+        const prepared = await act('ensure_session');
+        if (!prepared?.ok) return;
+        value.prepared = true;
+      }
+      await act('pointer_tap', point);
+    } finally { value.acting = false; }
+  };
   $('grid').append(root); return value;
 }
 let refreshing = false;
@@ -117,13 +157,14 @@ async function refresh() {
   refreshing = true;
   try {
     const registered = await api('/api/devices');
-    if (!$('join').firstChild || Date.now() - setupCheckedAt >= 5000) {
+    if (!setupCheckedAt || Date.now() - setupCheckedAt >= 5000) {
       const setup = await api('/api/setup');
-      const origin = setup.capture_origin || location.origin;
-      if (!$('join').firstChild || origin !== captureOrigin) {
-        $('join').replaceChildren(sharingLink('Open this private link in Safari on each iPhone:', origin + setup.join_path));
-      }
-      captureOrigin = origin; setupCheckedAt = Date.now();
+      captureOrigin = setup.capture_origin || location.origin; setupCheckedAt = Date.now();
+    }
+    try {
+      bluetoothCandidates(await api('/api/bluetooth')); $('bluetooth-error').textContent = '';
+    } catch (error) {
+      bluetoothCandidates([]); $('bluetooth-error').textContent = error.message;
     }
     const devices = registered.filter(d => !removedDevices.has(d.device_id));
     $('login').hidden = true; $('workspace').hidden = false;
@@ -142,14 +183,15 @@ async function refresh() {
       t.root.querySelector('h2').textContent = d.name;
       t.root.classList.toggle('live', d.capture_active);
       const sharingState = !d.frame_id ? 'Waiting for screen sharing' : d.capture_active ? 'Live' : 'Sharing paused';
-      t.root.querySelector('.status').textContent = `${d.device_id.slice(0,8)} • ${sharingState}${d.age_ms == null ? '' : ` • ${d.age_ms} ms`}\n${d.control_status || 'Control unavailable'}`;
+      if (!d.bluetooth_connected || !d.capture_active) t.prepared = false;
+      t.root.querySelector('.status').textContent = `Bluetooth: ${d.bluetooth_connected ? 'connected' : 'connection required'} • ${d.device_id.slice(0,8)} • ${sharingState}${d.age_ms == null ? '' : ` • ${d.age_ms} ms`}\n${d.control_status || 'Control unavailable'}`;
       t.root.querySelector('.placeholder').hidden = !!d.frame_id;
       const sharingURL = captureOrigin + d.capture_path;
-      if (t.sharingURL !== sharingURL) {
+      if (t.sharingURL !== sharingURL || t.sharingName !== d.name) {
         const link = sharingLink(`Private sharing link for ${d.name}:`, sharingURL);
         link.querySelector('.link-actions').append(t.removeButton);
         t.root.querySelector('.device-link').replaceChildren(link);
-        t.sharingURL = sharingURL;
+        t.sharingURL = sharingURL; t.sharingName = d.name;
       }
       if (!d.frame_id) {
         const img = t.root.querySelector('img'); img.hidden = true; img.removeAttribute('src');
@@ -157,21 +199,18 @@ async function refresh() {
         t.url = null; t.frame = null;
       }
     }
-    // Render every registered phone before waiting for any live snapshot.
     for (const d of devices) {
       const t = tiles.get(d.device_id);
-      if (!t || t.removed) continue;
-      if (d.frame_id && t.frame !== d.frame_id) {
-        try {
-          // Use snapshot metadata and JPEG atomically so a click references the image displayed.
-          const snapshot = await api(`/api/devices/${d.device_id}/snapshot`);
-          if (t.removed) continue;
-          const bytes = Uint8Array.from(atob(snapshot.frame.base64), c => c.charCodeAt(0));
-          const next = URL.createObjectURL(new Blob([bytes], {type: 'image/jpeg'}));
-          const img = t.root.querySelector('img'); img.src = next; await img.decode(); img.hidden = false;
-          if (t.removed) { URL.revokeObjectURL(next); continue; }
-          if (t.url) URL.revokeObjectURL(t.url); t.url = next; t.frame = snapshot.frame.frameID;
-        } catch (error) { t.root.querySelector('.result').textContent = error.message; }
+      if (t && !t.removed && !t.loading && !t.acting && d.frame_id && t.frame !== d.frame_id) {
+        t.loading = true;
+        (async () => {
+          try {
+            const snapshot = await api(`/api/devices/${d.device_id}/snapshot`);
+            if (t.removed || t.acting) return;
+            await showFrame(t, snapshot.frame);
+          } catch (error) { t.root.querySelector('.result').textContent = error.message; }
+          finally { t.loading = false; }
+        })();
       }
     }
   } catch (error) {failure(error); if (error.message.includes('credential')) {$('login').hidden = false; $('workspace').hidden = true;}}
