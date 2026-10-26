@@ -70,7 +70,8 @@ try {
     Invoke-Native $VenvPython @('-m','pip','install','--upgrade','pip')
     # The native HID provider is PyWinRT's compiled WinRT bindings, installed by platform markers.
     Invoke-Native $VenvPython @('-m','pip','install','--upgrade',(Join-Path $SourceDir 'server'))
-    $Skill = Join-Path $InstallRoot 'SKILL.md'
+    $Skill = Join-Path $InstallRoot 'agent-skill.md'
+    Remove-Item -LiteralPath (Join-Path $InstallRoot 'SKILL.md') -Force -ErrorAction SilentlyContinue
     Copy-Item (Join-Path $SourceDir 'macos\Resources\open-iphone-use-skill\SKILL.md') $Skill -Force
     if (!$NoAgents) {Invoke-Native $Executable @('register-agents','--skill',$Skill)}
     # pip's native console launcher embeds the venv Python path; copying it preserves

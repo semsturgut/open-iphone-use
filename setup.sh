@@ -113,10 +113,12 @@ if [ "$OIU_OS" = macos ]; then
     chmod 755 "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless.new"
     mv "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless.new" "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless"
 fi
-cp "$OIU_SOURCE_DIR/macos/Resources/open-iphone-use-skill/SKILL.md" "$OIU_INSTALL_ROOT/SKILL.md"
+cp "$OIU_SOURCE_DIR/macos/Resources/open-iphone-use-skill/SKILL.md" "$OIU_INSTALL_ROOT/agent-skill.md"
+# Remove the old template name; registration installs only the canonical skill.
+rm -f "$OIU_INSTALL_ROOT/SKILL.md"
 ln -sfn "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use" "$OIU_BIN_DIR/open-iphone-use"
 if [ "$OIU_NO_AGENTS" = 0 ]; then
-    "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use" register-agents --skill "$OIU_INSTALL_ROOT/SKILL.md"
+    "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use" register-agents --skill "$OIU_INSTALL_ROOT/agent-skill.md"
 fi
 printf '\nInstalled. Start now:\n  %s/open-iphone-use serve\n' "$OIU_BIN_DIR"
 case ":$PATH:" in *":$OIU_BIN_DIR:"*) ;; *) printf 'Add %s to PATH to use open-iphone-use from any terminal.\n' "$OIU_BIN_DIR" ;; esac
