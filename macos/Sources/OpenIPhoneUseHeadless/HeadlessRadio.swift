@@ -16,7 +16,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
     private var broker: UnixSocketBroker?
     private var state = "starting"
     private var lastError: String?
-    private let hid = CBUUID(string: "1812")
+    private let hid = CBUUID(string: "00001812-0000-1000-8000-00805F9B34FB")
 
     func start() throws {
         broker = UnixSocketBroker { [weak self] request in
