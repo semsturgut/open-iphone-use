@@ -14,7 +14,23 @@ PYTHONPATH=server .venv/bin/python -m unittest discover -s server/tests -v
 node --check server/oiu/web/app.js
 ```
 
-Run `sh -n setup.sh` and `shellcheck setup.sh` when available. On Windows parse/test `setup.ps1` and validate GATT behavior on real hardware; AST/contract tests cannot prove WinRT permission or driver support. Installer checks must use temporary home/prefix directories, preserving real client configs.
+Run `sh -n setup.sh` and `shellcheck setup.sh` when available. Check `setup.ps1` with the
+PowerShell parser and `Invoke-ScriptAnalyzer` (ShellCheck does not support PowerShell).
+Windows execution and GATT behavior still need real host tests; static/contract checks
+cannot prove WinRT permissions or driver support. Installer checks must use temporary
+home/prefix directories, preserving real client configs.
+
+To exercise installed CLI startup with automatic HTTPS and the real host radio (without
+sending physical input), build/copy the helper into the test environment and run:
+
+```sh
+swift build --package-path macos -c release
+cp macos/.build/release/open-iphone-use-headless .venv/bin/open-iphone-use-headless
+.venv/bin/python server/tests/serve_smoke.py .venv/bin/open-iphone-use
+```
+
+The smoke reports the radio capability separately from HTTP/enrollment success. See
+[the validation record](docs/web-server-validation.md) for tested and untested behavior.
 
 The packaged capture page mirrors the native source; its equality test must pass after
 any edit. To check two real native helper processes without Bluetooth advertising:

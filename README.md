@@ -137,6 +137,8 @@ Several software device sessions are supported concurrently. Actual phone counts
 on the adapter, OS and driver; no universal hardware capacity is claimed. Tests using
 synthetic screens and transport doubles do not establish real iPhone behavior. See the
 [validation record](docs/web-server-validation.md) and [platform setup](docs/headless-server.md).
+The latest agent-context Mac smoke reported `peripheralUnsupported` with no subscribed
+phones; its successful web/TLS checks do not establish physical HID readiness.
 
 ## Optional / legacy Mac app
 

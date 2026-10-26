@@ -9,7 +9,7 @@ physical device evidence and release readiness are separate.
 - [x] CLI server, device enrollment/list/status/action commands and portable stdio MCP.
 - [x] Authenticated web grid; new device tiles appear on first upload.
 - [x] Separate device credentials, frame stores, queues, stale-frame guards and cancellation.
-- [x] Native Swift headless helper reusing existing CoreBluetooth/calibration code.
+- [x] Shared native Swift headless radio reusing the HID descriptor; legacy controller preserved.
 - [x] Optional Mac app web client without starting the local radio/receiver.
 - [x] Automatic local CA, renewable LAN HTTPS, localhost operator UI and public certificate bootstrap.
 - [x] Real encrypted BlueZ and WinRT HID services with targeted/guarded notification routing.
@@ -20,7 +20,7 @@ physical device evidence and release readiness are separate.
 - [ ] Physical Safari sharing, calibration and HID validation on the new headless path.
 - [ ] Reliable simultaneous iPhone HID through one or multiple host radios; measure OS limits.
 - [ ] Hardware verification of the implemented BlueZ/WinRT HID paths and host/driver test matrix.
-- [ ] Token rotation/revocation, Windows ACL tooling, streaming performance and packaging.
+- [ ] Token rotation/revocation, Windows ACL verification, streaming performance and packaging.
 
 See [headless server setup and platform status](docs/headless-server.md).
 
