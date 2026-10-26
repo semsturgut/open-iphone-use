@@ -58,6 +58,7 @@ class BlueZTests(unittest.TestCase):
         adv = next(o for o in exported if isinstance(o, bluez.Advertisement))
         self.assertEqual(adv.ServiceUUIDs, [HID_UUID])
         self.assertEqual(adv.Appearance, 0x03c0)
+        self.assertEqual(adv.Timeout, 0)
 
     def test_control_writes_reject_boot_protocol_invalid_values_and_offsets(self):
         from oiu.platforms.bluez import Characteristic, Service
@@ -146,9 +147,13 @@ class WindowsContractTests(unittest.TestCase):
                 STARTED_WITHOUT_ALL_ADVERTISEMENT_DATA='partial', ABORTED='aborted'), buffer=lambda value: value)
         exec(compile(ast.Module(body=[start], type_ignores=[]), '<actual-winrt-start>', 'exec'), namespace)
         async def check():
-            radio = types.SimpleNamespace(reports={}, values={}, events=[], loop=asyncio.get_running_loop(),
+            async def keep(): pass
+            radio = types.SimpleNamespace(reports={}, values={}, events=[], tasks=set(), keep_advertising=keep, loop=asyncio.get_running_loop(),
                 _advertisement=lambda *args: None, _read=lambda *args: None, _write=lambda *args: None, _subscribers=lambda *args:None)
             await namespace['start'](radio)
+            self.assertTrue(radio.advertising.is_connectable)
+            self.assertTrue(radio.advertising.is_discoverable)
+            await asyncio.gather(*radio.tasks)
         asyncio.run(check())
         self.assertEqual(service_ids, [uuid.UUID(HID_UUID)])
         self.assertEqual([str(id_) for id_, _, _ in chars], [full_uuid(u) for u in
@@ -293,3 +298,65 @@ class BluetoothNameTests(unittest.TestCase):
             self.assertEqual([(p['id'],p['name'],p['reports']) for p in peers],[('a','Real a',[1,2]),('b','Real b',[1,2])])
             self.assertEqual(looked_up,['a','b'])
         asyncio.run(check())
+
+
+class ReconnectionTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec('dbus_fast'), 'requires dbus-fast')
+    def test_bluez_release_retries_same_advertisement_and_shutdown_does_not_retry(self):
+        from oiu.platforms.bluez import BlueZRadio,Advertisement
+        from dbus_fast import DBusError
+        calls=[]
+        async def register(path, options):
+            calls.append(path)
+            if len(calls)==1: raise DBusError('org.bluez.Error.NotReady','radio recovering')
+        async def intro(*args): return None
+        async def no_wait(*args): pass
+        async def check():
+            radio=object.__new__(BlueZRadio)
+            radio.stopping=False; radio.reconnect_tasks=set()
+            radio.bus=types.SimpleNamespace(introspect=intro,get_proxy_object=lambda *args:types.SimpleNamespace(
+                get_interface=lambda name:types.SimpleNamespace(call_register_advertisement=register)))
+            advert=Advertisement('/stable/advertisement',lambda:radio.advertisement_released('/adapter','/stable/advertisement'))
+            release=next(m for m in advert._get_methods(advert) if m.name=='Release')
+            with patch('oiu.platforms.bluez.asyncio.sleep',no_wait):
+                release.fn(advert)
+                await asyncio.gather(*radio.reconnect_tasks)
+            self.assertEqual(calls,['/stable/advertisement','/stable/advertisement'])
+            radio.stopping=True
+            release.fn(advert)
+            self.assertFalse(radio.reconnect_tasks)
+        asyncio.run(check())
+
+    def test_winrt_stopped_provider_restarts_with_same_connectable_parameters(self):
+        source=(Path(__file__).resolve().parents[1]/'oiu/platforms/windows.py').read_text()
+        cls=next(n for n in ast.parse(source).body if isinstance(n,ast.ClassDef) and n.name=='WindowsRadio')
+        method=next(n for n in cls.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='keep_advertising')
+        provider=types.SimpleNamespace(advertisement_status='stopped')
+        params=object(); calls=[]
+        radio=types.SimpleNamespace(stopping=False,provider=provider,advertising=params,error=None)
+        def advertise(value):
+            calls.append(value)
+            provider.advertisement_status='started'
+        provider.start_advertising=advertise
+        ticks=0
+        async def sleep(*args):
+            nonlocal ticks
+            ticks+=1
+            if ticks==3: radio.stopping=True
+        namespace=dict(asyncio=types.SimpleNamespace(sleep=sleep),GattServiceProviderAdvertisementStatus=types.SimpleNamespace(STOPPED='stopped',ABORTED='aborted'))
+        exec(compile(ast.Module(body=[method],type_ignores=[]),'<actual-winrt-reconnect>','exec'),namespace)
+        asyncio.run(namespace['keep_advertising'](radio))
+        self.assertEqual(calls,[params])  # No repeatedly starting an already active provider.
+
+    def test_mac_restoration_keeps_exact_report_reference_and_central_routing(self):
+        source=(Path(__file__).resolve().parents[2]/'macos/Sources/OpenIPhoneUseHeadless/HeadlessRadio.swift').read_text()
+        self.assertIn('CBPeripheralManagerOptionRestoreIdentifierKey: restorationIdentifier',source)
+        restored=source.split('willRestoreState dict:')[1].split('private func reportID')[0]
+        self.assertIn('CBPeripheralManagerRestoredStateServicesKey',restored)
+        self.assertIn('reference[1] == 1',restored)
+        self.assertIn('reports[1]',restored); self.assertIn('reports[2]',restored)
+        self.assertIn('characteristic.subscribedCentrals',restored)
+        self.assertIn('subscriptions[id, default: []].insert(report)',restored)
+        self.assertIn('onSubscribedCentrals: [peer]',source)
+        self.assertIn('peripheral.isAdvertising',source)
+        self.assertNotIn('UUID().uuidString',source)  # Identity cannot change on each launch.

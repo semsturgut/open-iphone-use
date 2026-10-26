@@ -38,6 +38,8 @@ class WindowsRadio(AsyncRadio):
         self.tasks = set()
         self.peer_names = {}
         self.name_pending = set()
+        self.advertising = None
+        self.stopping = False
         super().__init__()
 
     def _run_loop(self):
@@ -100,6 +102,7 @@ class WindowsRadio(AsyncRadio):
             advertising = GattServiceProviderAdvertisingParameters()
             advertising.is_connectable = True
             advertising.is_discoverable = True
+            self.advertising = advertising
             self.provider.start_advertising(advertising)
             deadline = self.loop.time() + 10
             while self.provider.advertisement_status not in (GattServiceProviderAdvertisementStatus.STARTED,
@@ -109,11 +112,27 @@ class WindowsRadio(AsyncRadio):
                 await asyncio.sleep(.05)
             if self.provider.advertisement_status == GattServiceProviderAdvertisementStatus.ABORTED:
                 raise OSError(self.error or 'Windows aborted HID advertising')
+            task=asyncio.create_task(self.keep_advertising())
+            self.tasks.add(task); task.add_done_callback(self.tasks.discard)
         except Exception as error:
             raise OSError(f'Windows HID startup failed: {error}. Check Settings > Bluetooth, privacy permissions, driver peripheral support and enterprise Bluetooth policy') from error
 
+    async def keep_advertising(self):
+        # The OS owns bonds and the local BLE identity. Use the same provider for retries.
+        while not self.stopping:
+            await asyncio.sleep(3)
+            if self.stopping or self.provider is None: return
+            status=self.provider.advertisement_status
+            if status in (GattServiceProviderAdvertisementStatus.STOPPED, GattServiceProviderAdvertisementStatus.ABORTED):
+                try: self.provider.start_advertising(self.advertising)
+                except OSError as error: self.error=f'Bluetooth advertising retry failed: {error}'
+
     def _advertisement(self, sender, args):
-        if args.error != BluetoothError.SUCCESS: self.error = f'Bluetooth advertising failed: {args.error}'
+        def update():
+            if args.error != BluetoothError.SUCCESS: self.error = f'Bluetooth advertising failed: {args.error}'
+            elif args.status in (GattServiceProviderAdvertisementStatus.STARTED,
+                                 GattServiceProviderAdvertisementStatus.STARTED_WITHOUT_ALL_ADVERTISEMENT_DATA): self.error=None
+        self.loop.call_soon_threadsafe(update)
 
     def _read(self, sender, args):
         deferral = args.get_deferral()
@@ -198,6 +217,7 @@ class WindowsRadio(AsyncRadio):
         self.report_values[(peer, report)] = bytes(payload)
 
     async def shutdown(self):
+        self.stopping = True
         for task in list(self.tasks): task.cancel()
         if self.tasks: await asyncio.gather(*self.tasks, return_exceptions=True)
         if self.provider: self.provider.stop_advertising()

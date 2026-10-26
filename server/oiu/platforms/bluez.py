@@ -127,9 +127,10 @@ class Characteristic(ServiceInterface):
 
 
 class Advertisement(ServiceInterface):
-    def __init__(self, path):
+    def __init__(self, path, released=None):
         super().__init__(ADV)
         self.path = path
+        self.released = released
     @dbus_property(access=PropertyAccess.READ)
     def Type(self) -> 's': return 'peripheral'
     @dbus_property(access=PropertyAccess.READ)
@@ -139,7 +140,11 @@ class Advertisement(ServiceInterface):
     @dbus_property(access=PropertyAccess.READ)
     def Appearance(self) -> 'q': return 0x03c0
     @method()
-    def Release(self): pass  # BlueZ already removed the advertisement.
+    def Release(self):
+        if self.released: self.released()
+    @dbus_property(access=PropertyAccess.READ)
+    def Timeout(self) -> 'q': return 0  # Keep accepting bonded centrals indefinitely.
+
 
 
 class Application(ServiceInterface):
@@ -163,6 +168,8 @@ class BlueZRadio(AsyncRadio):
         self.registrations = []
         self.reports = {}
         self.seen_peers = set()
+        self.reconnect_tasks = set()
+        self.stopping = False
         super().__init__()
 
     async def start(self):
@@ -200,7 +207,7 @@ class BlueZRadio(AsyncRadio):
                 interfaces = [service, *chars, *[Descriptor(c, c.report) for c in chars if c.report]]
                 self.bus.export(root, Application(interfaces))
                 for interface in interfaces: self.bus.export(interface.path, interface)
-                advertisement = Advertisement(root + '/advertisement')
+                advertisement = Advertisement(root + '/advertisement', lambda a=adapter, p=root+'/advertisement': self.advertisement_released(a,p))
                 self.bus.export(advertisement.path, advertisement)
                 intro = await self.bus.introspect('org.bluez', adapter)
                 proxy = self.bus.get_proxy_object('org.bluez', adapter, intro)
@@ -215,6 +222,25 @@ class BlueZRadio(AsyncRadio):
                 await props.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', True))
         except Exception as error:
             raise OSError(f'BlueZ HID startup failed: {error}. Install/start bluez and dbus, allow this user to call org.bluez, and run bluetoothctl agent KeyboardDisplay; default-agent for owner pairing') from error
+
+    def advertisement_released(self, adapter, path):
+        if self.stopping: return
+        task=asyncio.create_task(self.restore_advertisement(adapter,path))
+        self.reconnect_tasks.add(task); task.add_done_callback(self.reconnect_tasks.discard)
+
+    async def restore_advertisement(self, adapter, path):
+        # BlueZ retains bond keys. Re-register the same connectable advert after a release;
+        # do not RemoveDevice, replace its identity or initiate pairing on behalf of the owner.
+        while not self.stopping:
+            await asyncio.sleep(3)
+            try:
+                intro=await self.bus.introspect('org.bluez',adapter)
+                adv=self.bus.get_proxy_object('org.bluez',adapter,intro).get_interface('org.bluez.LEAdvertisingManager1')
+                await adv.call_register_advertisement(path,{})
+                return
+            except DBusError as error:
+                if error.type=='org.bluez.Error.AlreadyExists': return
+            except OSError: pass
 
     async def connected(self):
         objects = await self.manager.call_get_managed_objects()
@@ -265,6 +291,9 @@ class BlueZRadio(AsyncRadio):
         char.peer_values[peer] = bytes(payload)
 
     async def shutdown(self):
+        self.stopping = True
+        for task in self.reconnect_tasks: task.cancel()
+        if self.reconnect_tasks: await asyncio.gather(*self.reconnect_tasks, return_exceptions=True)
         for char in self.reports.values():
             for channel in list(char.channels.values()):
                 self.loop.remove_reader(channel.fileno()); channel.close()

@@ -1,5 +1,6 @@
 @preconcurrency import CoreBluetooth
 import Foundation
+import CryptoKit
 import OpenIPhoneUseCore
 import ObjCExceptionCatcher
 
@@ -8,6 +9,9 @@ import ObjCExceptionCatcher
 @MainActor
 final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate {
     private var manager: CBPeripheralManager?
+    private var publishedService: CBMutableService?
+    private var advertisingPending = false
+    private var reconnectTask: Task<Void, Never>?
     private var keyboard: CBMutableCharacteristic?
     private var mouse: CBMutableCharacteristic?
     private var peers: [String: CBCentral] = [:]
@@ -34,7 +38,15 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
         if ProcessInfo.processInfo.environment["OIU_DISABLE_BLUETOOTH"] == "1" { state = "bluetoothDisabledForTest"; return }
         nameResolver.start()
         manager = CBPeripheralManager(delegate: self, queue: .main,
-                                      options: [CBPeripheralManagerOptionShowPowerAlertKey: true])
+                                      options: [CBPeripheralManagerOptionShowPowerAlertKey: true,
+                                                CBPeripheralManagerOptionRestoreIdentifierKey: restorationIdentifier])
+        reconnectTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled, let self else { return }
+                if let manager = self.manager { self.resumeAdvertising(manager) }
+            }
+        }
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(3))
             guard let self, self.state == "starting" else { return }
@@ -43,7 +55,15 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
         }
     }
 
+    // Stable across helper launches; separate state roots never share a restoration identity.
+    private var restorationIdentifier: String {
+        let directory = ProcessInfo.processInfo.environment["OIU_SUPPORT_DIRECTORY"] ?? "default"
+        let digest = SHA256.hash(data: Data(directory.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "dev.openiphoneuse.hid." + digest
+    }
+
     func stop() async {
+        reconnectTask?.cancel(); reconnectTask = nil
         for id in Array(peers.keys) { await release(id) }
         nameResolver.stop()
         manager?.stopAdvertising()
@@ -106,6 +126,12 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
 
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         guard peripheral.state == .poweredOn else {
+            advertisingPending = false
+            if peripheral.state == .resetting {
+                publishedService = nil; keyboard = nil; mouse = nil
+                for id in peers.keys { reportQueue.cancel(peer: id, forget: true) }
+                peers.removeAll(); subscriptions.removeAll()
+            }
             let states: [CBManagerState: String] = [.unknown: "waitingForBluetooth", .resetting: "resetting",
                 .unsupported: "peripheralUnsupported", .unauthorized: "bluetoothPermissionDenied", .poweredOff: "bluetoothOff"]
             state = states[peripheral.state] ?? "unknown"
@@ -124,6 +150,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
             return
         }
         lastError = nil
+        if publishedService != nil { resumeAdvertising(peripheral); return }
         func encryptedRead(_ uuid: String) -> CBMutableCharacteristic {
             CBMutableCharacteristic(type: CBUUID(string: uuid), properties: [.read], value: nil, permissions: [.readEncryptionRequired])
         }
@@ -139,17 +166,54 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
         let service = CBMutableService(type: hid, primary: true)
         service.characteristics = [encryptedRead("2A4A"), encryptedRead("2A4B"), control, mode, keyboard!, mouse!]
         if let error = OpenIPhoneUseTryAddService(peripheral, service) { state = "servicePublishFailed"; lastError = error }
-        else { state = "publishing" }
+        else { publishedService = service; state = "publishing" }
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
-        if let error { state = "servicePublishFailed"; lastError = error.localizedDescription; return }
+        if let error { publishedService = nil; state = "servicePublishFailed"; lastError = error.localizedDescription; return }
+        state = "ready"
+        resumeAdvertising(peripheral)
+    }
+
+    private func resumeAdvertising(_ peripheral: CBPeripheralManager) {
+        guard peripheral.state == .poweredOn, publishedService != nil,
+              state != "publishing", !advertisingPending else { return }
+        if peripheral.isAdvertising { state = "advertising"; return }
+        advertisingPending = true
         peripheral.startAdvertising([CBAdvertisementDataLocalNameKey: "Open iPhone Use", CBAdvertisementDataServiceUUIDsKey: [hid]])
     }
 
     func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
+        advertisingPending = false
         state = error == nil ? "advertising" : "advertisingFailed"
         lastError = error?.localizedDescription
+    }
+
+    func peripheralManager(_ peripheral: CBPeripheralManager, willRestoreState dict: [String: Any]) {
+        guard let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService],
+              let service = services.first(where: { $0.uuid == hid }),
+              let characteristics = service.characteristics else { return }
+        var reports: [Int: CBMutableCharacteristic] = [:]
+        for case let characteristic as CBMutableCharacteristic in characteristics where characteristic.uuid == CBUUID(string: "2A4D") {
+            guard let reference = characteristic.descriptors?.first(where: { $0.uuid == CBUUID(string: "2908") })?.value as? Data,
+                  reference.count == 2, reference[1] == 1 else { continue }
+            reports[Int(reference[0])] = characteristic
+        }
+        guard let restoredKeyboard = reports[1], let restoredMouse = reports[2] else {
+            // An incomplete/old schema must be republished, never routed by guessed order.
+            peripheral.removeAllServices()
+            return
+        }
+        publishedService = service; keyboard = restoredKeyboard; mouse = restoredMouse
+        for (report, characteristic) in reports {
+            for central in characteristic.subscribedCentrals ?? [] {
+                let id = central.identifier.uuidString
+                peers[id] = central; subscriptions[id, default: []].insert(report)
+            }
+        }
+        state = "ready"
+        // poweredOn may be delivered after restoration; that callback resumes advertising.
+        resumeAdvertising(peripheral)
     }
 
     private func reportID(_ characteristic: CBCharacteristic) -> Int? {
@@ -172,6 +236,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
             peers.removeValue(forKey: id); subscriptions.removeValue(forKey: id)
             reportQueue.cancel(peer: id, forget: true)
         }
+        resumeAdvertising(peripheral)
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
