@@ -80,9 +80,20 @@ Bluetooth UUID configuration is required.
    no central IDs need to be copied. Then tap the screen, type, use keyboard shortcuts
    or scroll from that tile. Inspect the result after every action.
 
+With automatic LAN detection and generated certificates (the default), the HTTPS capture
+and public-certificate listeners bind all IPv4 interfaces. The operator UI checks the
+current LAN address every five seconds; a change renews the server certificate under the
+same CA and updates all sharing links without restarting. Reopen the updated link on each
+iPhone and approve sharing again. Startup terminal text and already copied links stay
+unchanged. Explicit `--host` or custom `--cert`/`--key` configurations stay fixed; restart
+with the new address and matching certificate for those configurations.
+
 Keep the server and iPhones on the same trusted private Wi-Fi. Only the owner can pair,
 trust certificates, unlock, approve capture or resume a stopped share. Close the legacy
 standalone Mac app when using this server so it does not compete for the radio.
+
+See the [HID backend audit](docs/hid-backend-audit.md) for UUID, encryption, pairing and
+platform restrictions, and the boundary between software checks and real iPhone behavior.
 
 ## CLI and MCP
 

@@ -79,6 +79,8 @@ class Characteristic(ServiceInterface):
         return self.value[offset:]
     @method()
     def WriteValue(self, value: 'ay', options: 'a{sv}'):
+        if options.get('offset', Variant('q', 0)).value != 0:
+            raise DBusError('org.bluez.Error.InvalidOffset', 'HID writes start at zero')
         if self.short not in ('2a4c', '2a4e') or len(value) != 1:
             raise DBusError('org.bluez.Error.NotPermitted', 'Only HID control point and report protocol writes are allowed')
         if self.short == '2a4e' and value != b'\x01':
@@ -241,7 +243,7 @@ class BlueZRadio(AsyncRadio):
             except (OSError, asyncio.TimeoutError) as error:
                 raise OSError('Per-peer BlueZ notify channel closed/backpressured') from error
         else:
-            same_adapter = [p for p in connected if p.startswith(adapter + '/dev_') and p in self.seen_peers]
+            same_adapter = [p for p in connected if p.startswith(adapter + '/dev_')]
             if not char.notifying: raise OSError('iPhone has not subscribed to this HID report')
             if same_adapter != [peer] or char.channels:
                 raise OSError('This BlueZ version uses shared notifications: use one paired phone per BLE adapter, or a BlueZ build supporting per-device AcquireNotify; refusing broadcast')

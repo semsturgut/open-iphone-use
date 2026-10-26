@@ -8,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -84,6 +85,29 @@ def certificates(directory, host):
         private_file(key_path,server_key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()))
         private_file(cert_path,cert.public_bytes(serialization.Encoding.PEM))
     return str(cert_path),str(key_path),str(root_pem),str(public)
+
+
+class LANOrigin:
+    """Refresh auto-detected capture addresses and the live TLS context together.
+
+    Called by the authenticated setup endpoint. Explicit hosts/custom certificates
+    remain fixed. The CA stays the same, so owner trust does not need to change.
+    """
+    def __init__(self, directory, host, port, context, changed):
+        self.directory, self.host, self.port = directory, host, port
+        self.context, self.changed = context, changed
+        self.lock = threading.Lock()
+
+    def __call__(self):
+        with self.lock:
+            host = lan_address()
+            if host != self.host:
+                cert, key, _, _ = certificates(self.directory, host)
+                self.context.load_cert_chain(cert, key)
+                origin = f'https://{host}:{self.port}'
+                self.changed(origin)
+                self.host = host
+            return f'https://{self.host}:{self.port}'
 
 
 def mac_helper():

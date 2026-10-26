@@ -49,6 +49,7 @@ let devices = [
 ];
 const revoked = [];
 let blobCounter = 0;
+let captureOrigin = 'https://192.168.1.2:27891';
 const context = vm.createContext({
   document, navigator, location: {hash: '', origin: 'http://127.0.0.1:27893'},
   sessionStorage: {getItem: () => '', setItem() {}}, setInterval() {},
@@ -57,7 +58,7 @@ const context = vm.createContext({
     requests.push(url);
     assert.equal(options.headers.Authorization, 'Bearer operator');
     let data;
-    if (url === '/api/setup') data = {capture_origin: 'https://192.168.1.2:27891', join_path: '/join?token=private'};
+    if (url === '/api/setup') data = {capture_origin: captureOrigin, join_path: '/join?token=private'};
     else if (options.method === 'POST') {
       const id = 'phone-' + devices.length;
       data = {device_id: id, name: 'Test phone', frame_id: null, capture_path: '/capture?token=' + id};
@@ -160,6 +161,14 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
   for (let i = 0; i < devices.length; i++) {
     assert.equal(grid.children[i].querySelector('.device-link').firstChild.children[1].children[0].href,
       'https://192.168.1.2:27891' + devices[i].capture_path);
+  }
+  // A route change refreshes the invitation and every phone link without reloading.
+  captureOrigin = 'https://172.20.10.2:27891';
+  await run('setupCheckedAt = 0; refresh()');
+  assert.equal(join.firstChild.children[1].children[0].href, captureOrigin + '/join?token=private');
+  for (let i = 0; i < devices.length; i++) {
+    assert.equal(grid.children[i].querySelector('.device-link').firstChild.children[1].children[0].href,
+      captureOrigin + devices[i].capture_path);
   }
   devices = [];
   await run('refresh()');

@@ -163,7 +163,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({"ok": False, "message": "Sharing active. Use Prepare in the control grid to check calibration."})
             self.admin()
             if path.path == '/api/setup' and not post:
-                return self.reply(dict(join_path=f'/join?token={registry.invite_token}',capture_origin=getattr(registry,'public_url','')))
+                origin = registry.capture_origin() if hasattr(registry, 'capture_origin') else getattr(registry, 'public_url', '')
+                return self.reply(dict(join_path=f'/join?token={registry.invite_token}',capture_origin=origin))
             if path.path == "/api/devices":
                 if post:
                     device = registry.create(json.loads(self.body(4096))["name"])

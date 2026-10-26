@@ -37,7 +37,7 @@ def call(args,path,data=None):
 
 
 def serve(args,parser):
-    from .bootstrap import lan_address,certificates
+    from .bootstrap import lan_address,certificates,LANOrigin
     from .control import Pairing,Control,atomic_json
     from .backends import create_radio
     from .certificate_server import CertificateServer
@@ -58,7 +58,10 @@ def serve(args,parser):
             pairing=Pairing(radio)
             registry.backend_factory=lambda device: Control(pairing,registry.directory/device.id)
             for device in registry.devices.values(): device.backend=registry.backend_factory(device)
-        server=Server((host,args.port),registry,context)
+        # Auto mode follows interface changes; explicit --host remains a fixed bind.
+        follow_lan = not args.local_http and not args.host and not args.cert
+        bind_host = '0.0.0.0' if follow_lan else host
+        server=Server((bind_host,args.port),registry,context)
         url=f"{'http' if args.local_http else 'https'}://{host}:{server.server_port}"
         registry.public_url=url
         ui_url=url
@@ -67,9 +70,14 @@ def serve(args,parser):
             local_thread=threading.Thread(target=local_server.serve_forever,daemon=True)
             local_thread.start()
             ui_url=f'http://127.0.0.1:{local_server.server_port}'
-        atomic_json(registry.directory/'connection.json',dict(url=ui_url,ca=None if local_server else ca,public_url=url))
+        def save_origin(origin):
+            atomic_json(registry.directory/'connection.json',dict(url=ui_url,ca=None if local_server else ca,public_url=origin))
+            registry.public_url=origin
+        save_origin(url)
+        if follow_lan:
+            registry.capture_origin=LANOrigin(registry.directory,host,server.server_port,context,save_origin)
         if public and not args.no_certificate_server:
-            public_server=CertificateServer((host,args.certificate_port),public)
+            public_server=CertificateServer((bind_host,args.certificate_port),public)
         def stop(*_): threading.Thread(target=server.shutdown,daemon=True).start()
         signal.signal(signal.SIGINT,stop); signal.signal(signal.SIGTERM,stop)
         print(f'Open iPhone Use: {url}',flush=True)

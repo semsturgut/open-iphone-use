@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -262,6 +263,46 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(len(devices),4)
         self.assertEqual(sum(d['capture_active'] for d in devices),2)
         self.assertEqual(len({d['name'] for d in devices}),4)
+
+    def test_setup_updates_auto_origin_and_live_tls_certificate_on_network_change(self):
+        import socket
+        import ssl
+        from oiu.bootstrap import certificates, LANOrigin
+        cert, key, ca, _ = certificates(self.tmp.name, '192.168.1.2')
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        tls = Server(('127.0.0.1', 0), self.registry, context, watchdog=False)
+        thread = threading.Thread(target=tls.serve_forever, daemon=True)
+        thread.start()
+        changes = []
+        self.registry.capture_origin = LANOrigin(self.tmp.name, '192.168.1.2', tls.server_port,
+                                                context, changes.append)
+        original_ca = Path(ca).read_bytes()
+        try:
+            with patch('oiu.bootstrap.lan_address', return_value='172.20.10.2'):
+                # No operator credential means no network/certificate mutation either.
+                with self.assertRaises(HTTPError) as unauthorized:
+                    urlopen(self.url + '/api/setup', timeout=2)
+                unauthorized.exception.close()
+                self.assertEqual(changes, [])
+                setup = self.api('/api/setup')
+                self.assertEqual(setup['capture_origin'], f'https://172.20.10.2:{tls.server_port}')
+                self.assertEqual(len(changes), 1)
+                self.api('/api/setup')
+                self.assertEqual(len(changes), 1)  # No repeated renewal for unchanged IP.
+            self.assertEqual(Path(ca).read_bytes(), original_ca)
+            # A new handshake on the existing listener validates the new IP with the same CA.
+            client = ssl.create_default_context(cafile=ca)
+            with socket.create_connection(('127.0.0.1', tls.server_port), timeout=2) as raw:
+                with client.wrap_socket(raw, server_hostname='172.20.10.2') as secure:
+                    self.assertTrue(secure.getpeercert())
+            with patch('oiu.bootstrap.lan_address', side_effect=OSError('No LAN address')):
+                with self.assertRaises(HTTPError) as error:
+                    self.api('/api/setup')
+                self.assertEqual(error.exception.code, 400)
+                self.assertEqual(len(changes), 1)
+        finally:
+            tls.shutdown(); tls.server_close(); thread.join(2)
 
     def test_single_writer_state_lease(self):
         from oiu.state import StateLease

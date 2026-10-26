@@ -338,9 +338,9 @@ public final class BLEHIDPeripheral: NSObject {
         guard let manager else { return }
 
         let hidInfo = CBMutableCharacteristic(type: Self.hidInformation, properties: [.read],
-                                              value: Data([0x11, 0x01, 0x00, 0x02]), permissions: [.readEncryptionRequired])
+                                              value: nil, permissions: [.readEncryptionRequired])
         let map = CBMutableCharacteristic(type: Self.reportMap, properties: [.read],
-                                          value: Self.reportDescriptor, permissions: [.readEncryptionRequired])
+                                          value: nil, permissions: [.readEncryptionRequired])
         let control = CBMutableCharacteristic(type: Self.hidControlPoint, properties: [.writeWithoutResponse],
                                               value: nil, permissions: [.writeEncryptionRequired])
         let mode = CBMutableCharacteristic(type: Self.protocolMode, properties: [.read, .writeWithoutResponse],

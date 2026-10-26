@@ -58,7 +58,7 @@ class WindowsRadio(AsyncRadio):
                 raise OSError('Bluetooth driver does not support LE peripheral role; update the driver or use a supported USB adapter')
             result = await GattServiceProvider.create_async(uuids.UUID(HID_UUID))
             if result.error != BluetoothError.SUCCESS:
-                raise OSError(f'HID service creation returned {result.error}; enable Bluetooth and allow Bluetooth access. DisabledByPolicy requires an administrator policy change')
+                raise OSError(f'HID service creation returned {result.error}; enable Bluetooth and allow Bluetooth access. DisabledByPolicy means Windows blocked service publication; check OS service restrictions, permissions and policy')
             self.provider = result.service_provider
             self.events.append((self.provider, 'advertisement_status_changed', self.provider.add_advertisement_status_changed(self._advertisement)))
             async def characteristic(short, properties, value=None, report=0):
@@ -130,9 +130,10 @@ class WindowsRadio(AsyncRadio):
                 data = bytearray(reader.unconsumed_buffer_length)
                 reader.read_bytes(data)
             finally: reader.close()
-            valid = len(data) == 1 and ((sender == self.mode and data[0] == 1) or (sender == self.control and data[0] in (0, 1)))
+            valid = request.offset == 0 and len(data) == 1 and ((sender == self.mode and data[0] == 1) or (sender == self.control and data[0] in (0, 1)))
             if not valid:
-                request.respond_with_protocol_error(0x13)
+                if request.option == GattWriteOption.WRITE_WITH_RESPONSE:
+                    request.respond_with_protocol_error(0x13)
                 return
             self.values[id(sender)] = bytes(data)
             if request.option == GattWriteOption.WRITE_WITH_RESPONSE: request.respond()

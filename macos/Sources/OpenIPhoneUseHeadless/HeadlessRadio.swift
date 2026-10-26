@@ -16,6 +16,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
     private var broker: UnixSocketBroker?
     private var state = "starting"
     private var lastError: String?
+    // Keep the full Bluetooth Base UUID: macOS rejects the short HID service UUID.
     private let hid = CBUUID(string: "00001812-0000-1000-8000-00805F9B34FB")
 
     func start() throws {
@@ -83,7 +84,8 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
         let deadline = Date().addingTimeInterval(3)
         while true {
             try Task.checkCancellation()
-            guard generations[id, default: 0] == generation, peers[id] != nil else {
+            guard generations[id, default: 0] == generation, peers[id] != nil,
+                  subscriptions[id]?.contains(report) == true else {
                 throw RadioError.message("HID send canceled or peer disconnected")
             }
             // Passing a concrete central array is essential: nil broadcasts to all phones.
@@ -119,8 +121,8 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
             return
         }
         lastError = nil
-        func constant(_ uuid: String, _ value: Data) -> CBMutableCharacteristic {
-            CBMutableCharacteristic(type: CBUUID(string: uuid), properties: [.read], value: value, permissions: [.readEncryptionRequired])
+        func encryptedRead(_ uuid: String) -> CBMutableCharacteristic {
+            CBMutableCharacteristic(type: CBUUID(string: uuid), properties: [.read], value: nil, permissions: [.readEncryptionRequired])
         }
         func report(_ id: UInt8) -> CBMutableCharacteristic {
             let characteristic = CBMutableCharacteristic(type: CBUUID(string: "2A4D"), properties: [.read, .notifyEncryptionRequired],
@@ -132,8 +134,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
         let control = CBMutableCharacteristic(type: CBUUID(string: "2A4C"), properties: [.writeWithoutResponse], value: nil, permissions: [.writeEncryptionRequired])
         let mode = CBMutableCharacteristic(type: CBUUID(string: "2A4E"), properties: [.read, .writeWithoutResponse], value: nil, permissions: [.readEncryptionRequired, .writeEncryptionRequired])
         let service = CBMutableService(type: hid, primary: true)
-        service.characteristics = [constant("2A4A", Data([0x11, 1, 0, 2])),
-                                   constant("2A4B", BLEHIDPeripheral.reportDescriptor), control, mode, keyboard!, mouse!]
+        service.characteristics = [encryptedRead("2A4A"), encryptedRead("2A4B"), control, mode, keyboard!, mouse!]
         if let error = OpenIPhoneUseTryAddService(peripheral, service) { state = "servicePublishFailed"; lastError = error }
         else { state = "publishing" }
     }
@@ -170,20 +171,29 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
         let value: Data
         switch request.characteristic.uuid.uuidString {
+        case "2A4A": value = Data([0x11, 1, 0, 2])
+        case "2A4B": value = BLEHIDPeripheral.reportDescriptor
         case "2A4E": value = Data([1])
         case "2A4D": value = request.characteristic === keyboard ? Data(repeating: 0, count: 8) : Data(repeating: 0, count: 4)
         default: peripheral.respond(to: request, withResult: .attributeNotFound); return
         }
-        guard request.offset <= value.count else { peripheral.respond(to: request, withResult: .invalidOffset); return }
+        guard request.offset >= 0 && request.offset <= value.count else { peripheral.respond(to: request, withResult: .invalidOffset); return }
         request.value = value.subdata(in: request.offset..<value.count)
         peripheral.respond(to: request, withResult: .success)
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
-        for request in requests {
-            let valid = ["2A4C", "2A4E"].contains(request.characteristic.uuid.uuidString) && request.value?.count == 1
-            peripheral.respond(to: request, withResult: valid ? .success : .requestNotSupported)
+        guard let first = requests.first else { return }
+        // CoreBluetooth requires one response for the entire write batch.
+        let valid = requests.allSatisfy { request in
+            guard request.offset == 0, let value = request.value, value.count == 1 else { return false }
+            switch request.characteristic.uuid.uuidString {
+            case "2A4C": return value[0] == 0 || value[0] == 1
+            case "2A4E": return value[0] == 1 // Report protocol only; no Boot reports published.
+            default: return false
+            }
         }
+        peripheral.respond(to: first, withResult: valid ? .success : .requestNotSupported)
     }
 }
 

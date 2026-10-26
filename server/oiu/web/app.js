@@ -4,6 +4,7 @@ if (location.hash) { sessionStorage.setItem('oiu-token', token); history.replace
 const $ = id => document.getElementById(id);
 const tiles = new Map();
 let captureOrigin = location.origin;
+let setupCheckedAt = 0;
 async function api(path, body, image = false) {
   const res = await fetch(path, {headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'}, ...(body ? {method: 'POST', body: JSON.stringify(body)} : {})});
   if (!res.ok) { const result = await res.json(); throw new Error(result.error || res.status); }
@@ -80,7 +81,7 @@ $('add').onsubmit = async event => {
 function tile(device) {
   const root = document.createElement('article'); root.className = 'phone';
   // Static markup only. Names, IDs and backend errors are always textContent.
-  root.innerHTML = '<h2></h2><p class="status"></p><p class="placeholder" role="status">Waiting for screen sharing</p><img class="screen" alt="Live iPhone screen" hidden><div class="device-link"></div><div class="controls"></div><form><input aria-label="Text to type" placeholder="Text to type" maxlength="500"><button>Type</button></form><p class="result" role="status"></p>';
+  root.innerHTML = '<h2></h2><p class="status"></p><p class="placeholder" role="status">Waiting for screen sharing</p><img class="screen" alt="Live iPhone screen" hidden><div class="device-link"></div><p class="result" role="status"></p>';
   const value = {root, device, url: null, frame: null, sharingURL: null};
   const act = async (operation, arguments_ = {}) => {
     try {
@@ -88,13 +89,9 @@ function tile(device) {
       root.querySelector('.result').textContent = result.message || JSON.stringify(result);
     } catch (error) { root.querySelector('.result').textContent = error.message; }
   };
-  for (const [label, op, args] of [['Prepare', 'ensure_session', {}], ['Home', 'send_key', {key: 'cmd+h'}], ['Scroll up', 'scroll', {dy: -100}], ['Scroll down', 'scroll', {dy: 100}], ['Release input', 'stop_control', {}]]) {
-    const button = document.createElement('button'); button.textContent = label;
-    button.onclick = () => act(op, args); root.querySelector('.controls').append(button);
-  }
   const img = root.querySelector('img');
-  img.onclick = event => {const r = img.getBoundingClientRect(); act('pointer_tap', {x: (event.clientX-r.left)/r.width, y: (event.clientY-r.top)/r.height});};
-  root.querySelector('form').onsubmit = event => {event.preventDefault(); const input = root.querySelector('input'); act('type_text', {text: input.value});};
+  // Prepare the HID session automatically before the first tap on this tile.
+  img.onclick = async event => {const r = img.getBoundingClientRect(); const point = {x: (event.clientX-r.left)/r.width, y: (event.clientY-r.top)/r.height}; if (!value.prepared) {await act('ensure_session'); value.prepared = true;} act('pointer_tap', point);};
   $('grid').append(root); return value;
 }
 let refreshing = false;
@@ -103,10 +100,13 @@ async function refresh() {
   refreshing = true;
   try {
     const devices = await api('/api/devices');
-    if (!$('join').firstChild) {
+    if (!$('join').firstChild || Date.now() - setupCheckedAt >= 5000) {
       const setup = await api('/api/setup');
-      captureOrigin = setup.capture_origin || location.origin;
-      $('join').replaceChildren(sharingLink('Open this private link in Safari on each iPhone:', captureOrigin + setup.join_path));
+      const origin = setup.capture_origin || location.origin;
+      if (!$('join').firstChild || origin !== captureOrigin) {
+        $('join').replaceChildren(sharingLink('Open this private link in Safari on each iPhone:', origin + setup.join_path));
+      }
+      captureOrigin = origin; setupCheckedAt = Date.now();
     }
     $('login').hidden = true; $('workspace').hidden = false;
     $('count').textContent = `${devices.filter(d => d.capture_active).length} sharing / ${devices.length} phones`;
