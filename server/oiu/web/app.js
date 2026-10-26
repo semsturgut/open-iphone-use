@@ -1,15 +1,21 @@
 'use strict';
-let token = location.hash.slice(1) || sessionStorage.getItem('oiu-token') || '';
-if (location.hash) { sessionStorage.setItem('oiu-token', token); history.replaceState(null, '', location.pathname); }
 const $ = id => document.getElementById(id);
 const tiles = new Map();
 const removedDevices = new Set();
 let captureOrigin = location.origin;
 let setupCheckedAt = 0;
 async function api(path, body, image = false, method = body ? 'POST' : 'GET') {
-  const res = await fetch(path, {method, headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'}, ...(body ? {body: JSON.stringify(body)} : {})});
+  const res = await fetch(path, {method, headers: {'Content-Type': 'application/json'}, ...(body ? {body: JSON.stringify(body)} : {})});
   if (!res.ok) { const result = await res.json(); throw new Error(result.error || res.status); }
   return image ? res.blob() : res.json();
+}
+function connectionLights(container, bluetooth, sharing) {
+  const entries = [[bluetooth, 'Bluetooth connected', "Bluetooth not connected — control won't work"],
+                   [sharing, 'Screen sharing live', "Screen sharing off — control won't work"]];
+  container.replaceChildren(...entries.map(([on, good, bad]) => {
+    const lamp = document.createElement('span'); lamp.className = `status-light ${on ? 'on' : 'off'}`;
+    lamp.textContent = on ? good : bad; return lamp;
+  }));
 }
 function failure(error) { $('error').textContent = error.message; }
 async function copyLink(url) {
@@ -70,7 +76,6 @@ function sharingLink(label, url) {
   } catch (error) { failure(new Error(`QR code unavailable: ${error.message || error}`)); }
   return root;
 }
-$('login').onsubmit = event => {event.preventDefault(); $('error').textContent = ''; token = $('token').value; sessionStorage.setItem('oiu-token', token); refresh();};
 let candidateKey = '';
 const adding = new Set();
 function bluetoothCandidates(candidates) {
@@ -108,7 +113,7 @@ async function showFrame(t, frame) {
 function tile(device) {
   const root = document.createElement('article'); root.className = 'phone';
   // Static markup only. Names, IDs and backend errors are always textContent.
-  root.innerHTML = '<h2></h2><p class="status"></p><p class="placeholder" role="status">Waiting for screen sharing</p><img class="screen" alt="Live iPhone screen" hidden><div class="device-link"></div><p class="result" role="status"></p>';
+  root.innerHTML = '<h2></h2><div class="connection-lights" aria-live="polite"></div><p class="status"></p><p class="placeholder" role="status">Waiting for screen sharing</p><img class="screen" alt="Live iPhone screen" hidden><div class="device-link"></div><p class="result" role="status"></p>';
   const value = {root, device, url: null, frame: null, sharingURL: null};
   const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Remove';
   value.removeButton = remove;
@@ -153,10 +158,12 @@ function tile(device) {
 }
 let refreshing = false;
 async function refresh() {
-  if (!token || refreshing) return;
+  if (refreshing) return;
   refreshing = true;
   try {
     const registered = await api('/api/devices');
+    const globalStatus = await api('/api/status');
+    connectionLights($('global-lights'), globalStatus.bluetooth_connected, globalStatus.sharing_active);
     if (!setupCheckedAt || Date.now() - setupCheckedAt >= 5000) {
       const setup = await api('/api/setup');
       captureOrigin = setup.capture_origin || location.origin; setupCheckedAt = Date.now();
@@ -167,7 +174,7 @@ async function refresh() {
       bluetoothCandidates([]); $('bluetooth-error').textContent = error.message;
     }
     const devices = registered.filter(d => !removedDevices.has(d.device_id));
-    $('login').hidden = true; $('workspace').hidden = false;
+    $('workspace').hidden = false;
     $('count').textContent = `${devices.filter(d => d.capture_active).length} sharing / ${devices.length} phones`;
     $('empty').hidden = devices.length > 0;
     const ids = new Set(devices.map(d => d.device_id));
@@ -181,6 +188,7 @@ async function refresh() {
       if (!tiles.has(d.device_id)) tiles.set(d.device_id, tile(d));
       const t = tiles.get(d.device_id); t.device = d;
       t.root.querySelector('h2').textContent = d.name;
+      connectionLights(t.root.querySelector('.connection-lights'), d.bluetooth_connected, d.capture_active);
       t.root.classList.toggle('live', d.capture_active);
       const sharingState = !d.frame_id ? 'Waiting for screen sharing' : d.capture_active ? 'Live' : 'Sharing paused';
       if (!d.bluetooth_connected || !d.capture_active) t.prepared = false;
@@ -213,7 +221,10 @@ async function refresh() {
         })();
       }
     }
-  } catch (error) {failure(error); if (error.message.includes('credential')) {$('login').hidden = false; $('workspace').hidden = true;}}
+  } catch (error) {
+    failure(error); connectionLights($('global-lights'), false, false);
+    for (const t of tiles.values()) { connectionLights(t.root.querySelector('.connection-lights'), false, false); t.prepared = false; }
+  }
   finally { refreshing = false; }
 }
 refresh(); setInterval(refresh, 500);

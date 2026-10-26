@@ -60,10 +60,11 @@ const context = vm.createContext({
   Blob, atob, URL: {createObjectURL: () => 'blob:' + (++blobCounter), revokeObjectURL: url => revoked.push(url)},
   fetch: async (url, options) => {
     requests.push(url);
-    assert.equal(options.headers.Authorization, 'Bearer operator');
+    assert.equal(options.headers.Authorization, undefined);
     let data;
     if (url === '/api/setup') data = {capture_origin: captureOrigin, bluetooth_required: true};
     else if (url === '/api/bluetooth') data = btCandidates;
+    else if (url === '/api/status') data = {bluetooth_connected:devices.every(d=>d.bluetooth_connected),sharing_active:devices.length>0 && devices.every(d=>d.capture_active)};
     else if (options.method === 'DELETE') {
       deletes.push(url);
       if (deleteFails) return {ok: false, json: async () => ({error: 'Removal failed'})};
@@ -125,7 +126,7 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
   await buttons(root)[0].onclick(); assert.match(status.textContent, /Could not copy/);
   assert.equal(document.body.children.length, 0); assert.equal(document.activeElement, previous);
   // Only Bluetooth-selected candidates can create records; no free-text form remains.
-  await run("token = 'operator'; refresh()");
+  await new Promise(resolve => setImmediate(resolve)); await run('refresh()');
   const list = document.getElementById('bluetooth-list');
   assert.equal(list.children.length, 3);
   assert.equal(list.children[0].children[1].disabled, true);
@@ -142,10 +143,12 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
     assert.doesNotMatch(tile.querySelector('.status').textContent, /null ms/);
     const item = tile.querySelector('.device-link').children[0];
     assert.equal(item.children[1].children[0].href, 'https://192.168.1.2:27891' + devices[i].capture_path);
-    assert.deepEqual(buttons(item).map(button => button.textContent), ['Copy', 'Remove']);
+    assert.deepEqual(buttons(item).map(button => button.textContent).filter(text=>text!=='Share'), ['Copy', 'Remove']);
     assert.equal(item.children[2].tagName, 'canvas');
     assert.equal(tile.querySelector('.controls'), undefined);
     assert.equal(tile.querySelector('form'), undefined);
+    assert.equal(tile.querySelector('.connection-lights').children[0].className, 'status-light on');
+    assert.match(tile.querySelector('.connection-lights').children[1].textContent, /control won't work/);
   }
   assert.match(grid.children[0].querySelector('.status').textContent, /Pair iPhone/);
   assert.match(grid.children[1].querySelector('.status').textContent, /Paired; first tap/);
@@ -159,6 +162,13 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
   assert.equal(firstTile.querySelector('img').hidden, false);
   assert.equal(firstTile.querySelector('.device-link').firstChild, firstLink);
   assert.equal(run("tiles.get('phone-a').frame"), 'frame-1');
+  devices[0].bluetooth_connected = false;
+  await run('refresh()');
+  assert.equal(firstTile.querySelector('.connection-lights').children[0].className, 'status-light off');
+  assert.equal(firstTile.querySelector('.connection-lights').children[1].className, 'status-light on');
+  assert.equal(document.getElementById('global-lights').children[0].className, 'status-light off');
+  devices[0].bluetooth_connected = true;
+
   await run('refresh()');
   assert.equal(requests.filter(url => url.endsWith('/snapshot')).length, 1);
   // After a restart, no frames remain but every phone and its link still does.
