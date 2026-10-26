@@ -75,6 +75,24 @@ class ServerTests(unittest.TestCase):
             error.close()
             raise
 
+    def test_operator_static_assets(self):
+        web = Path(__file__).resolve().parents[1] / 'oiu' / 'web'
+        for route, filename, mime in [('/', 'index.html', 'text/html'),
+                                      ('/app.js', 'app.js', 'text/javascript'),
+                                      ('/style.css', 'style.css', 'text/css'),
+                                      ('/qrcode.js', 'qrcode.js', 'text/javascript')]:
+            with self.subTest(route=route), urlopen(self.url + route, timeout=2) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers.get_content_type(), mime)
+                self.assertEqual(response.read(), (web / filename).read_bytes())
+        html = (web / 'index.html').read_text()
+        self.assertLess(html.index('src="/qrcode.js"'), html.index('src="/app.js"'))
+
+    @unittest.skipUnless(__import__('shutil').which('node'), 'Node required for web interaction checks')
+    def test_operator_link_actions(self):
+        subprocess.run(['node', str(Path(__file__).with_name('test_web_links.cjs'))],
+                       check=True, capture_output=True, text=True)
+
     def test_independent_credentials_frames_and_restart(self):
         self.api('/api/frame', JPEG, self.a.token, True)
         self.api('/api/frame', JPEG + b'b', self.b.token, True)

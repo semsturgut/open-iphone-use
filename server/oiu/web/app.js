@@ -10,14 +10,71 @@ async function api(path, body, image = false) {
   return image ? res.blob() : res.json();
 }
 function failure(error) { $('error').textContent = error.message; }
-$('login').onsubmit = event => {event.preventDefault(); token = $('token').value; sessionStorage.setItem('oiu-token', token); refresh();};
+async function copyLink(url) {
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(url); return; }
+  } catch (_) { /* Clipboard permission denied: try the legacy selection API. */ }
+  const previous = document.activeElement;
+  const selection = document.getSelection();
+  const ranges = selection ? Array.from({length: selection.rangeCount}, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+  const textarea = document.createElement('textarea');
+  textarea.value = url; textarea.readOnly = true;
+  textarea.className = 'clipboard-fallback';
+  document.body.append(textarea);
+  try {
+    textarea.select();
+    if (!document.execCommand('copy')) throw new Error('Could not copy link. Select and copy the link manually.');
+  } finally {
+    textarea.remove(); previous?.focus();
+    if (selection) { selection.removeAllRanges(); ranges.forEach(range => selection.addRange(range)); }
+  }
+}
+function sharingLink(label, url) {
+  const root = document.createElement('section'); root.className = 'sharing-link';
+  const row = document.createElement('div'); row.className = 'link-actions';
+  const link = document.createElement('a'); link.href = url; link.textContent = url;
+  row.append(link);
+  if (typeof navigator.share === 'function') {
+    const share = document.createElement('button'); share.type = 'button'; share.textContent = 'Share';
+    share.onclick = async () => {
+      $('error').textContent = '';
+      try { await navigator.share({title: 'Open iPhone Use', url}); }
+      catch (error) { if (error.name !== 'AbortError') failure(error); }
+    };
+    row.append(share);
+  }
+  const copy = document.createElement('button'); copy.type = 'button'; copy.textContent = 'Copy';
+  copy.onclick = async () => {
+    $('error').textContent = '';
+    try { await copyLink(url); $('error').textContent = 'Link copied.'; }
+    catch (error) { failure(error); }
+  };
+  row.append(copy);
+  const caption = document.createElement('p'); caption.textContent = label;
+  root.append(caption, row);
+  try {
+    const qr = qrcode(0, 'M'); qr.addData(url); qr.make();
+    const canvas = document.createElement('canvas'); canvas.className = 'link-qr';
+    canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', `QR code: ${label}`);
+    const size = qr.getModuleCount(), scale = 4, margin = 4;
+    canvas.width = canvas.height = (size + margin * 2) * scale;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#000';
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      if (qr.isDark(y, x)) context.fillRect((x + margin) * scale, (y + margin) * scale, scale, scale);
+    }
+    root.append(canvas);
+  } catch (error) { failure(new Error(`QR code unavailable: ${error.message || error}`)); }
+  return root;
+}
+$('login').onsubmit = event => {event.preventDefault(); $('error').textContent = ''; token = $('token').value; sessionStorage.setItem('oiu-token', token); refresh();};
 $('add').onsubmit = async event => {
   event.preventDefault();
+  $('error').textContent = '';
   try {
     const device = await api('/api/devices', {name: $('name').value});
-    const link = document.createElement('a');
-    link.href = captureOrigin + device.capture_path; link.textContent = captureOrigin + device.capture_path;
-    $('invite').replaceChildren(document.createTextNode('Private sharing link for this phone: '), link);
+    $('invite').append(sharingLink(`Private sharing link for ${device.name || $('name').value}:`, captureOrigin + device.capture_path));
     $('name').value = ''; await refresh();
   } catch (error) { failure(error); }
 };
@@ -50,11 +107,9 @@ async function refresh() {
     if (!$('join').firstChild) {
       const setup = await api('/api/setup');
       captureOrigin = setup.capture_origin || location.origin;
-      const link = document.createElement('a'); link.href = captureOrigin + setup.join_path;
-      link.textContent = captureOrigin + setup.join_path;
-      $('join').replaceChildren(document.createTextNode('Open this private link in Safari on each iPhone: '), link);
+      $('join').replaceChildren(sharingLink('Open this private link in Safari on each iPhone:', captureOrigin + setup.join_path));
     }
-    $('login').hidden = true; $('workspace').hidden = false; $('error').textContent = '';
+    $('login').hidden = true; $('workspace').hidden = false;
     $('count').textContent = `${devices.filter(d => d.capture_active).length} sharing / ${devices.length} phones`;
     $('empty').hidden = devices.some(d => d.frame_id);
     for (const d of devices) {

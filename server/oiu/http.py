@@ -118,9 +118,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise PermissionError("Cross-origin request rejected")
             path = urlsplit(self.path)
             registry = self.server.registry
-            if not post and path.path in ("/", "/app.js", "/style.css"):
-                file = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}[path.path]
-                mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css"}[path.path]
+            if not post and path.path in ("/", "/app.js", "/style.css", "/qrcode.js"):
+                file = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/qrcode.js": "qrcode.js"}[path.path]
+                mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css", "/qrcode.js": "text/javascript"}[path.path]
                 return self.reply((WEB / file).read_bytes(), mime=mime)
             if path.path == "/join" and not post:
                 token = parse_qs(path.query).get('token', [''])[0]

@@ -54,6 +54,10 @@ Bluetooth UUID configuration is required.
 
 1. Open the printed **localhost web UI** (normally `http://127.0.0.1:27893`). Its operator
    link logs you in. This loopback UI needs no certificate installation on the host.
+   Use **Share** beside the private invitation to send it via AirDrop on supported Mac
+   browsers, **Copy** to copy it, or scan its QR code with the iPhone camera.
+   **Create sharing link** makes a named phone link with the same controls. Share is
+   hidden when the browser has no system sharing API; Copy remains available.
 2. Install the public CA on each iPhone, checking its fingerprint against the terminal,
    and explicitly enable it under **Settings → General → About → Certificate Trust Settings**.
    The public certificate can be downloaded from the printed HTTP link or transferred
