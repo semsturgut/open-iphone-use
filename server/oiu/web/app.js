@@ -3,10 +3,11 @@ let token = location.hash.slice(1) || sessionStorage.getItem('oiu-token') || '';
 if (location.hash) { sessionStorage.setItem('oiu-token', token); history.replaceState(null, '', location.pathname); }
 const $ = id => document.getElementById(id);
 const tiles = new Map();
+const removedDevices = new Set();
 let captureOrigin = location.origin;
 let setupCheckedAt = 0;
-async function api(path, body, image = false) {
-  const res = await fetch(path, {headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'}, ...(body ? {method: 'POST', body: JSON.stringify(body)} : {})});
+async function api(path, body, image = false, method = body ? 'POST' : 'GET') {
+  const res = await fetch(path, {method, headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'}, ...(body ? {body: JSON.stringify(body)} : {})});
   if (!res.ok) { const result = await res.json(); throw new Error(result.error || res.status); }
   return image ? res.blob() : res.json();
 }
@@ -83,6 +84,22 @@ function tile(device) {
   // Static markup only. Names, IDs and backend errors are always textContent.
   root.innerHTML = '<h2></h2><p class="status"></p><p class="placeholder" role="status">Waiting for screen sharing</p><img class="screen" alt="Live iPhone screen" hidden><div class="device-link"></div><p class="result" role="status"></p>';
   const value = {root, device, url: null, frame: null, sharingURL: null};
+  const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Remove';
+  value.removeButton = remove;
+  remove.onclick = async () => {
+    if (remove.disabled || !confirm(`Remove ${value.device.name}? Its sharing link will stop working and control will stop.`)) return;
+    remove.disabled = true; $('error').textContent = '';
+    try {
+      const result = await api(`/api/devices/${value.device.device_id}`, null, false, 'DELETE');
+      value.removed = true; removedDevices.add(value.device.device_id);
+      if (value.url) URL.revokeObjectURL(value.url);
+      value.url = null; value.frame = null;
+      root.remove(); tiles.delete(value.device.device_id);
+      $('error').textContent = result.message;
+      await refresh();
+    } catch (error) { failure(error); }
+    finally { remove.disabled = false; }
+  };
   const act = async (operation, arguments_ = {}) => {
     try {
       const result = await api(`/api/devices/${value.device.device_id}/action`, {operation, arguments: {expectedFrameID: value.frame, ...arguments_}});
@@ -99,7 +116,7 @@ async function refresh() {
   if (!token || refreshing) return;
   refreshing = true;
   try {
-    const devices = await api('/api/devices');
+    const registered = await api('/api/devices');
     if (!$('join').firstChild || Date.now() - setupCheckedAt >= 5000) {
       const setup = await api('/api/setup');
       const origin = setup.capture_origin || location.origin;
@@ -108,6 +125,7 @@ async function refresh() {
       }
       captureOrigin = origin; setupCheckedAt = Date.now();
     }
+    const devices = registered.filter(d => !removedDevices.has(d.device_id));
     $('login').hidden = true; $('workspace').hidden = false;
     $('count').textContent = `${devices.filter(d => d.capture_active).length} sharing / ${devices.length} phones`;
     $('empty').hidden = devices.length > 0;
@@ -128,7 +146,9 @@ async function refresh() {
       t.root.querySelector('.placeholder').hidden = !!d.frame_id;
       const sharingURL = captureOrigin + d.capture_path;
       if (t.sharingURL !== sharingURL) {
-        t.root.querySelector('.device-link').replaceChildren(sharingLink(`Private sharing link for ${d.name}:`, sharingURL));
+        const link = sharingLink(`Private sharing link for ${d.name}:`, sharingURL);
+        link.querySelector('.link-actions').append(t.removeButton);
+        t.root.querySelector('.device-link').replaceChildren(link);
         t.sharingURL = sharingURL;
       }
       if (!d.frame_id) {
@@ -140,13 +160,16 @@ async function refresh() {
     // Render every registered phone before waiting for any live snapshot.
     for (const d of devices) {
       const t = tiles.get(d.device_id);
+      if (!t || t.removed) continue;
       if (d.frame_id && t.frame !== d.frame_id) {
         try {
           // Use snapshot metadata and JPEG atomically so a click references the image displayed.
           const snapshot = await api(`/api/devices/${d.device_id}/snapshot`);
+          if (t.removed) continue;
           const bytes = Uint8Array.from(atob(snapshot.frame.base64), c => c.charCodeAt(0));
           const next = URL.createObjectURL(new Blob([bytes], {type: 'image/jpeg'}));
           const img = t.root.querySelector('img'); img.src = next; await img.decode(); img.hidden = false;
+          if (t.removed) { URL.revokeObjectURL(next); continue; }
           if (t.url) URL.revokeObjectURL(t.url); t.url = next; t.frame = snapshot.frame.frameID;
         } catch (error) { t.root.querySelector('.result').textContent = error.message; }
       }

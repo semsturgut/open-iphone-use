@@ -33,6 +33,11 @@ class Device:
     action_lock: object = field(default_factory=threading.Lock)
     slots: object = field(default_factory=lambda: threading.BoundedSemaphore(16))
     epoch: int = 0
+    removed: bool = False
+
+    def require_present(self):
+        if self.removed:
+            raise ValueError("Device removed")
 
     def summary(self):
         with self.lock:
@@ -46,6 +51,7 @@ class Device:
         if len(jpeg) > MAX_FRAME or not jpeg.startswith(b"\xff\xd8\xff"):
             raise ValueError("Expected JPEG up to 4 MiB")
         with self.lock:
+            self.require_present()
             # Adapter ingress stays concurrent with actions waiting for fresh captures.
             controls = self.backend.ingest(jpeg)
             self.frame_id = controls.get("frameID", str(uuid.uuid4()))
@@ -61,6 +67,8 @@ class Device:
         return self.backend.stop_capture()
 
     def action(self, operation, arguments):
+        with self.lock:
+            self.require_present()
         if operation == "stop_control":
             return self.stop()  # Bypasses the action queue to cancel immediately.
         if operation not in ACTIONS:
@@ -71,6 +79,7 @@ class Device:
             generation = self.epoch
             with self.action_lock:
                 with self.lock:
+                    self.require_present()
                     if generation != self.epoch:
                         raise ValueError("Action canceled by stop")
                     expected = arguments.get("expectedFrameID")
@@ -133,6 +142,46 @@ class Registry:
                 if secrets.compare_digest(device.token, token):
                     return device
         raise PermissionError("Invalid capture credential")
+
+    def remove(self, device_id):
+        # Persist revocation before reporting success. A stale handler reference is
+        # tombstoned as well, so it cannot upload or enter the action queue again.
+        with self.lock:
+            device = self.devices[device_id]
+            with device.lock:
+                del self.devices[device_id]
+                try:
+                    self.save()
+                except OSError:
+                    self.devices[device_id] = device
+                    raise
+                device.removed = True
+                device.token = ""
+                device.epoch += 1
+                device.active = False
+                device.jpeg, device.frame_id, device.at = b"", None, 0
+                device.history.clear()
+        warnings = []
+        # Cancel before waiting for the action lock: running input may be waiting
+        # for a frame and queued work must not delay cancellation.
+        cleanup = getattr(device.backend, "remove", None)
+        if cleanup is None:
+            try:
+                device.backend.stop_capture()
+            except (OSError, ValueError) as error:
+                warnings.append(str(error))
+            cleanup = device.backend.close
+        try:
+            cleanup()
+        except (OSError, ValueError) as error:
+            warnings.append(str(error))
+        with device.action_lock:
+            pass  # Running input has finished; queued actions reject the tombstone.
+        result = dict(ok=True, device_id=device_id, message="Phone removed; its sharing link is revoked.")
+        if warnings:
+            result["warnings"] = warnings
+            result["message"] += " Control cleanup reported: " + "; ".join(warnings)
+        return result
 
     def list(self):
         with self.lock:

@@ -53,9 +53,11 @@ and HID; this is a diagnostic mode, not an automatically selected fallback.
 Enable AssistiveTouch and pair each phone to the host's advertised HID device through
 owner-controlled settings. Keep the phone unlocked. Open the same private HTTPS invitation
 in Safari on each phone, approve sharing, and keep Safari visible for initial preparation.
-Tiles appear automatically on first upload; `devices` lists live, paused and enrolled slots.
+Tiles appear immediately for every registered phone, with a waiting placeholder until its
+first upload; `devices` lists live, paused and enrolled slots.
 
-Prepare/`ensure_session` associates the screen with an available Bluetooth peer. For one
+The first tap on a tile automatically calls `ensure_session` to associate the screen
+with an available Bluetooth peer. CLI/MCP can also request preparation explicitly. For one
 new peer and one new capture the association is one-to-one. With several new peers it
 opens the calibration boards and correlates targeted pointer movement with authenticated
 Safari hover feedback or visible pointer changes in the corresponding captures. All new
@@ -72,11 +74,28 @@ fractions using the measured border. Calibration is stored per device/peer, moti
 and aspect ratio. It is a two-point estimate, not a guarantee at every pixel. Screen
 rotation, changed pointer settings or suspect accuracy require preparation again.
 
-The grid offers tap, Home, typing, scroll and release input. On each action the server
+The grid offers live-screen taps, sharing-link controls and Remove. Home, typing,
+scroll, explicit preparation and release input are available through CLI/MCP. On each action the server
 checks a frame ID from that device within five seconds, serializes input, releases on
 failure/cancellation, waits for a new frame and returns an image to MCP. Stop bypasses
 queued work. Capture expiry releases held keys/buttons. Owner unlocking, certificate trust,
 pairing, iOS sharing and protected-screen restrictions are preserved.
+
+## Remove a phone
+
+Confirm **Remove** next to a tile's Share/Copy/QR area, run
+`open-iphone-use remove --device <id>`, or use the portable MCP `remove_device` tool
+with an explicitly chosen `device_id`. The API is `DELETE /api/devices/<id>` with the
+operator Bearer credential; a capture token or shared invitation cannot delete phones.
+
+Removal persists revocation, cancels running and queued actions, drops in-memory frames,
+detaches the phone's pairing/calibration engine and deletes its saved calibration. Old
+capture links/uploads are rejected even after restart. Other phones, the shared radio,
+the invitation for enrolling new phones and OS Bluetooth bonds remain intact. Removing
+an unknown/already removed ID returns 404. A failed state write preserves the phone;
+if radio cleanup fails after revocation, the response reports cleanup warnings while the
+identity remains deleted. Removing a phone is separate from forgetting its Bluetooth
+pairing in the owner's OS settings.
 
 ## macOS implementation
 
@@ -146,7 +165,7 @@ document the underlying interfaces, not verified iPhone compatibility.
 Register the installed CLI with `args: ["mcp"]`. List devices, choose an explicit ID,
 read its screenshot, then prepare/act using its fresh frame ID. Stop requires only the
 ID. The portable MCP surface covers keyboard, pointer, calibration, scroll, swipe/feed
-and release. Advanced legacy diagnostic/retry aliases remain available only from the
+and release, plus explicit phone removal. Advanced legacy diagnostic/retry aliases remain available only from the
 standalone Swift helper. No model or API key is embedded in this project.
 
 Each device stores its own capture credential, frame history, peer mapping/calibration,
@@ -154,5 +173,5 @@ action serialization and cancellation generation. State is owner-private (POSIX 
 Windows NTFS ACLs), and an OS lease prevents two servers sharing the same state directory.
 Frames are memory-only. Limits: 64 enrolled slots, 4 MiB per JPEG, 16 accepted actions per
 device and 64 main HTTP connections. The server is for a trusted LAN/localhost. Token
-rotation/revocation, high-density streaming optimization and internet-grade deployment
+rotation beyond per-device removal, high-density streaming optimization and internet-grade deployment
 are separate future work. [Installation](installation.md), [validation](web-server-validation.md).

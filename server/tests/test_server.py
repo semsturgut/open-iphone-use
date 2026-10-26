@@ -26,6 +26,7 @@ class FakeHID:
         self.enter = threading.Event()
         self.release = threading.Event()
         self.block = False
+        self.closed = False
 
     def request(self, operation, **arguments):
         self.calls.append((operation, arguments))
@@ -43,7 +44,7 @@ class FakeHID:
         return self.request('stop_control')
 
     def close(self):
-        pass
+        self.closed = True
 
 
 class ServerTests(unittest.TestCase):
@@ -64,11 +65,11 @@ class ServerTests(unittest.TestCase):
         self.registry.close()
         self.tmp.cleanup()
 
-    def api(self, path, body=None, token=None, capture=False, extra=None):
+    def api(self, path, body=None, token=None, capture=False, extra=None, method=None):
         headers = {'X-Open-iPhone-Use-Token' if capture else 'Authorization':
                    (token or self.a.token) if capture else 'Bearer ' + (token or self.registry.admin_token)}
         headers.update(extra or {})
-        request = Request(self.url + path, data=body, headers=headers)
+        request = Request(self.url + path, data=body, headers=headers, method=method)
         try:
             with urlopen(request, timeout=5) as response:
                 return json.load(response)
@@ -143,6 +144,106 @@ class ServerTests(unittest.TestCase):
         temporary.chmod(0o644)
         self.registry.save()
         self.assertEqual(self.registry.path.stat().st_mode & 0o777, 0o600)
+
+    def test_remove_requires_operator_and_revokes_live_device_across_restart(self):
+        self.a.upload(JPEG)
+        self.b.upload(JPEG)
+        old_token, other_token = self.a.token, self.b.token
+        path = f'/api/devices/{self.a.id}'
+        for token in ('invalid', old_token, self.registry.invite_token):
+            with self.assertRaises(HTTPError) as error:
+                self.api(path, token=token, method='DELETE')
+            self.assertEqual(error.exception.code, 401)
+        with self.assertRaises(HTTPError) as error:
+            urlopen(Request(self.url + path, method='DELETE'), timeout=2)
+        self.assertEqual(error.exception.code, 401)
+        error.exception.close()
+        with self.assertRaises(HTTPError) as error:
+            self.api(path, extra={'Origin': 'https://hostile.example'}, method='DELETE')
+        self.assertEqual(error.exception.code, 401)
+        self.assertEqual(len(self.registry.devices), 2)
+        result = self.api(path, method='DELETE')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['device_id'], self.a.id)
+        self.assertEqual([d['device_id'] for d in self.api('/api/devices')], [self.b.id])
+        self.assertTrue(self.a.removed)
+        self.assertTrue(self.a.backend.closed)
+        self.assertIn(('stop_control', {}), self.a.backend.calls)
+        self.assertEqual((self.a.jpeg, self.a.frame_id, self.a.at, len(self.a.history)), (b'', None, 0, 0))
+        for route, body, capture in [(f'/capture?token={old_token}', None, False),
+                ('/api/frame', JPEG, True), ('/api/tap', b'{"x":0.5,"y":0.5}', True),
+                ('/api/pointer', b'{"epoch":"old"}', True)]:
+            with self.assertRaises(HTTPError) as error:
+                self.api(route, body, token=old_token, capture=capture)
+            self.assertEqual(error.exception.code, 401)
+        with self.assertRaises(ValueError): self.a.upload(JPEG)
+        with self.assertRaises(ValueError): self.a.action('send_key', {})
+        with self.assertRaises(HTTPError) as error: self.api(path, method='DELETE')
+        self.assertEqual(error.exception.code, 404)
+        self.assertTrue(self.b.active)
+        self.assertFalse(self.b.backend.closed)
+        self.assertEqual(self.b.token, other_token)
+        self.assertTrue(self.b.action('click', {'expectedFrameID': self.b.frame_id})['ok'])
+        self.server.registry = Registry(self.tmp.name)
+        self.assertNotIn(self.a.id, self.server.registry.devices)
+        with self.assertRaises(PermissionError): self.server.registry.capture_device(old_token)
+        self.assertEqual(self.server.registry.devices[self.b.id].token, other_token)
+
+    def test_remove_cancels_running_and_queued_actions(self):
+        self.a.upload(JPEG)
+        self.a.backend.block = True
+        with ThreadPoolExecutor(3) as pool:
+            first = pool.submit(self.a.action, 'click', {'expectedFrameID': self.a.frame_id})
+            self.assertTrue(self.a.backend.enter.wait(1))
+            waiting = pool.submit(self.a.action, 'send_key', {'expectedFrameID': self.a.frame_id, 'key': 'enter'})
+            removed = pool.submit(self.api, f'/api/devices/{self.a.id}', method='DELETE')
+            self.assertTrue(removed.result(3)['ok'])
+            first.result(2)
+            with self.assertRaises(ValueError): waiting.result(2)
+        self.assertFalse(any(op == 'send_key' for op, _ in self.a.backend.calls))
+        self.assertTrue(self.a.backend.closed)
+
+    def test_remove_preserves_identity_when_persisting_revocation_fails(self):
+        old_token = self.a.token
+        with patch.object(self.registry, 'save', side_effect=OSError('disk full')):
+            with self.assertRaises(HTTPError) as error:
+                self.api(f'/api/devices/{self.a.id}', method='DELETE')
+            self.assertEqual(error.exception.code, 400)
+        self.assertIs(self.registry.devices[self.a.id], self.a)
+        self.assertEqual(self.a.token, old_token)
+        self.assertFalse(self.a.removed)
+        self.assertFalse(self.a.backend.closed)
+        self.assertIn(self.a.id, Registry(self.tmp.name).devices)
+
+    def test_remove_revokes_even_if_backend_cleanup_reports_failure(self):
+        old_token = self.a.token
+        with patch.object(self.a.backend, 'stop_capture', side_effect=OSError('radio unavailable')):
+            result = self.api(f'/api/devices/{self.a.id}', method='DELETE')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['warnings'], ['radio unavailable'])
+        self.assertTrue(self.a.backend.closed)
+        with self.assertRaises(PermissionError): self.registry.capture_device(old_token)
+
+    def test_remove_cli_and_mcp_tool(self):
+        base = [sys.executable, '-m', 'oiu.cli', '--state', self.tmp.name, '--url', self.url]
+        removed = subprocess.run(base + ['remove', '--device', self.a.id],
+                                 check=True, capture_output=True, text=True)
+        self.assertTrue(json.loads(removed.stdout)['ok'])
+        again = subprocess.run(base + ['remove', '--device', self.a.id], capture_output=True, text=True)
+        self.assertNotEqual(again.returncode, 0)
+        invalid = subprocess.run(base + ['remove', '--device', '../devices'], capture_output=True, text=True)
+        self.assertNotEqual(invalid.returncode, 0)
+        remove_tool = next(tool for tool in tools() if tool['name'] == 'remove_device')
+        self.assertEqual(remove_tool['inputSchema']['required'], ['device_id'])
+        self.assertTrue(remove_tool['annotations']['destructiveHint'])
+        messages = [dict(jsonrpc='2.0', id=1, method='tools/call', params={'name': 'remove_device', 'arguments': {}}),
+                    dict(jsonrpc='2.0', id=2, method='tools/call', params={'name': 'remove_device', 'arguments': {'device_id': self.b.id}})]
+        output = subprocess.run(base + ['mcp'], input='\n'.join(map(json.dumps, messages)) + '\n',
+                                check=True, capture_output=True, text=True)
+        first, second = map(json.loads, output.stdout.splitlines())
+        self.assertTrue(first['result']['isError'])
+        self.assertFalse(second['result']['isError'])
+        self.assertEqual(self.registry.list(), [])
 
     def test_cross_device_and_stale_frames_cannot_control(self):
         self.a.upload(JPEG)

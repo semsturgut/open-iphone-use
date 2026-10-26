@@ -111,13 +111,22 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.dispatch(True)
 
-    def dispatch(self, post):
+    def do_DELETE(self):
+        self.dispatch(False, delete=True)
+
+    def dispatch(self, post, delete=False):
         try:
             origin = self.headers.get("Origin")
             if origin and urlsplit(origin).netloc != self.headers.get("Host"):
                 raise PermissionError("Cross-origin request rejected")
             path = urlsplit(self.path)
             registry = self.server.registry
+            if delete:
+                self.admin()
+                parts = path.path.strip('/').split('/')
+                if len(parts) == 3 and parts[:2] == ['api', 'devices']:
+                    return self.reply(registry.remove(parts[2]))
+                return self.reply({'error': 'Not found'}, 404)
             if not post and path.path in ("/", "/app.js", "/style.css", "/qrcode.js"):
                 file = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/qrcode.js": "qrcode.js"}[path.path]
                 mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css", "/qrcode.js": "text/javascript"}[path.path]
@@ -159,8 +168,8 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(body or b'{}')
                 if data.get('force') is True:
                     return self.reply(device.action('prepare_session', {'expectedFrameID': device.frame_id}))
-                # Share-start readiness is read-only. A calibration button is explicit input consent.
-                return self.reply({"ok": False, "message": "Sharing active. Use Prepare in the control grid to check calibration."})
+                # Share-start readiness is read-only; the first operator tap prepares input.
+                return self.reply({"ok": False, "message": "Sharing active. Tap the screen in the operator grid to prepare and control this phone."})
             self.admin()
             if path.path == '/api/setup' and not post:
                 origin = registry.capture_origin() if hasattr(registry, 'capture_origin') else getattr(registry, 'public_url', '')

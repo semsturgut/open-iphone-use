@@ -60,7 +60,9 @@ class ControlTests(unittest.TestCase):
             while self.running:
                 for peer,engine in list(self.radio.engines.items()):
                     x,y=self.radio.positions[peer]
-                    engine.ingest(screen(x,y,engine.board_open))
+                    try: engine.ingest(screen(x,y,engine.board_open))
+                    except ValueError:
+                        if not engine.closed: raise
                 time.sleep(.04)
         self.thread=threading.Thread(target=frames,daemon=True); self.thread.start()
         deadline=time.monotonic()+2
@@ -122,6 +124,87 @@ class ControlTests(unittest.TestCase):
         self.assertLessEqual(len(movements),1)
         self.assertFalse(self.engine.board_open)
         self.assertFalse(other.board_open)
+
+    def test_remove_detaches_control_and_erases_only_its_calibration(self):
+        self.engine.bind('phone-a')
+        other = Control(self.pairing, Path(self.tmp.name)/'b')
+        other.bind('phone-b')
+        self.engine.remove()
+        self.assertTrue(self.engine.closed)
+        self.assertNotIn(self.engine, self.pairing.engines)
+        self.assertIn(other, self.pairing.engines)
+        self.assertFalse(self.engine.path.exists())
+        self.assertTrue(other.path.exists())
+        self.assertIsNone(self.engine.peer)
+        self.assertIsNone(self.engine.calibration)
+        self.assertEqual((self.engine.jpeg, self.engine.frame_id, len(self.engine.taps)), (b'', None, 0))
+        self.assertFalse(self.engine.board_open)
+        with self.assertRaises(ValueError): self.engine.ingest(screen())
+        with self.assertRaises(ValueError): self.engine.request('capture_pointer', epoch='old')
+        with self.assertRaises(ValueError): self.engine.request('capture_tap', x=.5, y=.5)
+        with self.assertRaises(ValueError): self.engine.save()
+        with self.assertRaises(ValueError): self.pairing.associate(self.engine)
+        self.assertTrue(all(peer == 'phone-a' for peer, _, _ in self.radio.calls))
+
+    def test_remove_releases_after_an_inflight_report_and_prevents_new_input(self):
+        self.engine.bind('phone-a')
+        entered, resume = threading.Event(), threading.Event()
+        original = self.radio.send
+        def delayed(peer, report, payload):
+            entered.set()
+            if not resume.wait(3): raise OSError('Test send timed out')
+            original(peer, report, payload)
+        self.radio.send = delayed
+        result = []
+        action = threading.Thread(target=lambda: result.append(self.engine.request('type_text', text='abc')))
+        action.start()
+        self.assertTrue(entered.wait(2))
+        removal = threading.Thread(target=self.engine.remove)
+        removal.start()
+        try:
+            deadline = time.monotonic() + 2
+            while not self.engine.closed and time.monotonic() < deadline: time.sleep(.01)
+            self.assertTrue(self.engine.closed)
+        finally:
+            resume.set(); action.join(3); removal.join(3)
+        self.assertFalse(action.is_alive())
+        self.assertFalse(removal.is_alive())
+        self.assertFalse(result[0]['ok'])
+        self.assertEqual(self.radio.calls[-2:], [('phone-a', 1, keyboard()), ('phone-a', 2, mouse())])
+        with self.assertRaises(ValueError): self.engine.request('type_text', text='later')
+
+    def test_remove_cancels_shared_association_without_leaving_an_engine(self):
+        self.radio.positions['phone-b'] = [0, 0]
+        other = Control(self.pairing, Path(self.tmp.name)/'b')
+        self.radio.engines['phone-b'] = other
+        deadline = time.monotonic() + 2
+        while not other.at and time.monotonic() < deadline: time.sleep(.01)
+        self.assertTrue(other.at)
+        entered, resume = threading.Event(), threading.Event()
+        original = self.radio.send
+        def delayed(peer, report, payload):
+            entered.set()
+            if not resume.wait(3): raise OSError('Test probe timed out')
+            original(peer, report, payload)
+        self.radio.send = delayed
+        result = []
+        action = threading.Thread(target=lambda: result.append(self.engine.request('ensure_session')))
+        action.start()
+        self.assertTrue(entered.wait(3))
+        removal = threading.Thread(target=self.engine.remove)
+        removal.start()
+        try:
+            deadline = time.monotonic() + 2
+            while not self.engine.closed and time.monotonic() < deadline: time.sleep(.01)
+            self.assertTrue(self.engine.closed)
+        finally:
+            resume.set(); action.join(4); removal.join(4)
+        self.assertFalse(action.is_alive())
+        self.assertFalse(removal.is_alive())
+        self.assertFalse(result[0]['ok'])
+        self.assertNotIn(self.engine, self.pairing.engines)
+        self.assertFalse(other.board_open)
+        self.assertLessEqual(sum(r == 2 and any(p[1:]) for _, r, p in self.radio.calls), 1)
 
     def test_stale_and_invalid_text_send_no_nonzero_reports(self):
         self.engine.bind('phone-a')

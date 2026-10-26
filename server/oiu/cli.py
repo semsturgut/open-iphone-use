@@ -22,10 +22,10 @@ def connection(args):
     return url.rstrip('/'), saved.get('ca') if url.rstrip('/')==saved.get('url') else None
 
 
-def call(args,path,data=None):
+def call(args,path,data=None,method=None):
     registry=json.loads((Path(args.state)/'state.json').read_text())
     url,ca=connection(args)
-    request=Request(url+path,data=json.dumps(data).encode() if data is not None else None,
+    request=Request(url+path,data=json.dumps(data).encode() if data is not None else None,method=method,
                     headers={'Authorization':'Bearer '+registry['admin_token'],'Content-Type':'application/json'})
     try:
         with urlopen(request,timeout=95,context=ssl.create_default_context(cafile=ca)) as response: return json.load(response)
@@ -95,7 +95,7 @@ def serve(args,parser):
             print(f'Web UI (private operator link): {ui_url}/#{registry.admin_token}',flush=True)
             print(f'Open in Safari on EACH iPhone: {url}/join?token={registry.invite_token}',flush=True)
         else: print(f'Web UI: {ui_url} — use open-iphone-use token to log in; sharing links appear there.',flush=True)
-        print('Approve Start sharing in Safari. Each screen appears automatically. Use Prepare once with Safari visible, then control that tile. No pairing UUID configuration is needed.',flush=True)
+        print('Approve Start sharing in Safari. Tap a live screen in the grid; the first tap prepares its control session with Safari visible. No pairing UUID configuration is needed.',flush=True)
         server.serve_forever()
     finally:
         if server: server.server_close()
@@ -125,6 +125,8 @@ def main():
     start.add_argument('--no-print-secrets',action='store_true')
     sub.add_parser('devices'); sub.add_parser('token'); sub.add_parser('mcp')
     add=sub.add_parser('add'); add.add_argument('name')
+    remove=sub.add_parser('remove',help='Remove a phone and revoke its sharing link')
+    remove.add_argument('--device',required=True)
     status=sub.add_parser('status'); status.add_argument('--device',required=True)
     act=sub.add_parser('action'); act.add_argument('--device',required=True)
     act.add_argument('operation'); act.add_argument('--arguments',default='{}')
@@ -144,6 +146,9 @@ def main():
             result=call(args,'/api/devices',{'name':args.name})
             origin=call(args,'/api/setup').get('capture_origin') or connection(args)[0]
             print(json.dumps(dict(device_id=result['device_id'],capture_url=origin+result['capture_path']),indent=2))
+        elif args.command=='remove':
+            if not args.device.isalnum(): raise ValueError('Invalid device ID')
+            print(json.dumps(call(args,f'/api/devices/{args.device}',method='DELETE'),indent=2))
         elif args.command=='status': print(json.dumps(call(args,f'/api/devices/{args.device}/status'),indent=2))
         elif args.command=='action':
             result=call(args,f'/api/devices/{args.device}/action',dict(operation=args.operation,arguments=json.loads(args.arguments)))

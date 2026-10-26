@@ -28,13 +28,15 @@ class Pairing:
 
     def associate(self, engine):
         with self.lock:
+            if engine.closed:
+                raise ValueError('Device removed or control closed')
             peers = [p['id'] for p in self.radio.peers() if set(p['reports']) == {1,2}]
             if engine.peer in peers: return engine.peer
             if engine.peer:
                 # Re-pairing may change the OS peer identity. Re-associate from live boards,
                 # never require the owner to find/copy an internal UUID.
                 engine.peer=None; engine.calibration=None
-            claimed = {e.peer for e in self.engines if e.peer and e.is_fresh()}
+            claimed = {e.peer for e in self.engines if e.peer and (e.is_fresh() or e.closed)}
             candidates = [p for p in peers if p not in claimed]
             if not candidates: raise ValueError('Pair this host as Open iPhone Use in Settings > Accessibility > Touch > AssistiveTouch > Devices > Bluetooth Devices; allow the host Bluetooth permission prompt')
             active = [e for e in self.engines if not e.peer and e.is_fresh()]
@@ -106,6 +108,7 @@ class Control:
         saved = json.loads(self.path.read_text()) if self.path.exists() else {}
         self.peer, self.calibration = saved.get('peer'), saved.get('calibration')
         self.condition = threading.Condition()
+        self.input_lock = threading.Lock()
         self.jpeg, self.at, self.frame_id = b'', 0, None
         self.board_open, self.board_epoch, self.pair_epoch = False, 1, ''
         self.taps = deque(maxlen=64)
@@ -113,6 +116,7 @@ class Control:
         self.generation, self.sending_generation = 0, 0
         self.units = (0,0)
         self.error = None
+        self.closed = False
         pairing.engines.append(self)
 
     @property
@@ -120,19 +124,23 @@ class Control:
         if self.error: return self.error
         health=getattr(self.radio,'startup',{})
         if health.get('error'): return 'Bluetooth: '+health['state']
-        return 'Pointer ready' if self.calibration and self.peer else ('Paired; prepare pointer' if self.peer else 'Pair iPhone, then Prepare')
+        return 'Pointer ready' if self.calibration and self.peer else ('Paired; first tap prepares pointer' if self.peer else 'Pair iPhone, then tap screen')
 
-    def save(self): atomic_json(self.path, dict(peer=self.peer, calibration=self.calibration))
+    def save(self):
+        with self.condition:
+            if self.closed: raise ValueError('Device removed or control closed')
+            atomic_json(self.path, dict(peer=self.peer, calibration=self.calibration))
     def bind(self, peer):
         for other in self.pairing.engines:
             if other is not self and other.peer==peer:
                 if other.is_fresh(): raise ValueError('This phone is already associated with another active screen share')
                 other.peer=None; other.calibration=None; other.save()
         self.peer=peer; self.calibration=None; self.save()
-    def is_fresh(self): return bool(self.at and time.monotonic()-self.at <= 5)
+    def is_fresh(self): return bool(not self.closed and self.at and time.monotonic()-self.at <= 5)
 
     def ingest(self, jpeg):
         with self.condition:
+            if self.closed: raise ValueError('Device removed or control closed')
             self.jpeg, self.at, self.frame_id = jpeg, time.monotonic(), str(uuid.uuid4())
             self.condition.notify_all()
             return dict(frameID=self.frame_id, fps=15, boardOpen=self.board_open,
@@ -147,9 +155,10 @@ class Control:
         if not self.is_fresh(): raise ValueError('Screen sharing stopped or capture is stale; input released')
 
     def packet(self, report, payload):
-        self.fresh()
-        if not self.peer: raise ValueError('No paired iPhone associated with this screen')
-        self.radio.send(self.peer, report, payload)
+        with self.input_lock:
+            self.fresh()
+            if not self.peer: raise ValueError('No paired iPhone associated with this screen')
+            self.radio.send(self.peer, report, payload)
 
     def wait_frame(self, after, timeout=5):
         deadline=time.monotonic()+timeout
@@ -246,7 +255,7 @@ class Control:
 
     def absolute(self,x,y):
         x,y=fraction(x),fraction(y)
-        if not self.calibration: raise ValueError('Run Prepare/ensure_session with Safari sharing visible before coordinate input')
+        if not self.calibration: raise ValueError('Run ensure_session with Safari sharing visible before coordinate input')
         if self.peer not in [p['id'] for p in self.radio.peers() if set(p['reports'])=={1,2}]: raise ValueError('Paired iPhone disconnected')
         pic=vision.image(self.jpeg)
         if abs(pic.width/pic.height-self.calibration['aspect'])>.03: raise ValueError('Screen orientation changed; prepare the pointer again')
@@ -258,21 +267,47 @@ class Control:
         self.generation+=1
         self.at=0
         with self.condition: self.condition.notify_all()
-        if self.peer: self.radio.release(self.peer)
+        with self.input_lock:
+            if self.peer: self.radio.release(self.peer)
         return dict(ok=True,message='Input canceled and released for this phone')
 
     def close(self):
-        if self.peer: self.radio.release(self.peer)
+        with self.condition:
+            self.closed = True
+            self.generation += 1
+            self.at = 0
+            self.board_open = False
+            self.condition.notify_all()
+        # Invalidate any shared association probe before waiting for its lock.
+        with self.pairing.lock:
+            if self in self.pairing.engines: self.pairing.engines.remove(self)
+            with self.input_lock:
+                peer, self.peer = self.peer, None
+                with self.condition:
+                    self.calibration = None
+                    self.jpeg, self.frame_id = b'', None
+                    self.taps.clear(); self.hover = None
+                if peer: self.radio.release(peer)
+
+    def remove(self):
+        try:
+            self.close()
+        finally:
+            self.path.unlink(missing_ok=True)
 
     def request(self,operation,**args):
+        if self.closed: raise ValueError('Device removed or control closed')
         if operation=='capture_tap':
             with self.condition:
+                if self.closed: raise ValueError('Device removed or control closed')
                 self.taps.append((time.monotonic(),fraction(args['x']),fraction(args['y'])))
                 self.condition.notify_all()
             return dict(ok=True,message='Calibration feedback received')
         if operation=='capture_pointer':
             if not isinstance(args.get('epoch'),str) or len(args['epoch'])>64: raise ValueError('Invalid pairing epoch')
-            self.hover=(time.monotonic(),args.get('epoch'))
+            with self.condition:
+                if self.closed: raise ValueError('Device removed or control closed')
+                self.hover=(time.monotonic(),args.get('epoch'))
             return dict(ok=True)
         if operation=='stop_control': return self.stop_capture()
         if operation=='get_device_status':

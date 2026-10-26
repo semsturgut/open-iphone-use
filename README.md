@@ -75,10 +75,15 @@ Bluetooth UUID configuration is required.
 4. Open the same printed **private HTTPS sharing invitation** in Safari on each iPhone.
    Each browser gets its own device identity and capture token. Tap **Start sharing** and
    approve iOS sharing. The live screen replaces that phone’s placeholder in the same tile.
-5. Use **Prepare** in a tile, or ask your MCP agent to prepare that device. Keep Safari
-   visible while the pointer is measured. Bluetooth peers are associated automatically;
-   no central IDs need to be copied. Then tap the screen, type, use keyboard shortcuts
-   or scroll from that tile. Inspect the result after every action.
+5. Tap a live screen in its tile. The first tap automatically runs `ensure_session`;
+   keep Safari visible while the pointer is measured. Bluetooth peers are associated
+   automatically; no central IDs need to be copied. Keyboard, typing, scroll and explicit
+   preparation/release actions are available through CLI/MCP. Inspect the result after
+   every action.
+6. Use **Remove** beside a phone’s sharing link and confirm to delete that phone, stop
+   its control and revoke its link. Its tile, saved identity and calibration are removed;
+   other phones and OS Bluetooth pairings stay intact. You can also run
+   `open-iphone-use remove --device <id>` or ask your MCP agent to use `remove_device`.
 
 With automatic LAN detection and generated certificates (the default), the HTTPS capture
 and public-certificate listeners bind all IPv4 interfaces. The operator UI checks the
@@ -101,6 +106,7 @@ platform restrictions, and the boundary between software checks and real iPhone 
 open-iphone-use devices
 open-iphone-use status --device DEVICE_ID
 open-iphone-use add "Named test iPhone"  # optional named sharing link
+open-iphone-use remove --device DEVICE_ID # remove phone and revoke its link
 open-iphone-use action --device DEVICE_ID send_key \
   --arguments '{"expectedFrameID":"FRESH_FRAME_ID","key":"cmd+h"}'
 open-iphone-use action --device DEVICE_ID stop_control

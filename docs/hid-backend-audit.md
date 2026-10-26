@@ -47,7 +47,8 @@ is retained. Advertising does not establish successful iPhone pairing or input.
   native path uses a single central and a report queue; headless uses explicit
   per-central sends with a 3-second backpressure deadline. Neither OS acceptance nor
   a saved binding proves post-restart input delivery; owners may need to reconnect
-  in AssistiveTouch and run Prepare with Safari visible.
+  in AssistiveTouch and prepare with Safari visible (automatically on the first tile
+  tap, or explicitly through CLI/MCP).
 - **Timing:** portable control retains 8 ms motion spacing, 24 ms keyboard press/release
   spacing and 35 ms pointer presses (legacy native click: 30 ms). Shared Mac sends
   retry backpressure every 5 ms, preserving order through the serialized device

@@ -50,7 +50,10 @@ let devices = [
 const revoked = [];
 let blobCounter = 0;
 let captureOrigin = 'https://192.168.1.2:27891';
+let confirmed = false, deleteFails = false;
+const confirmations = [], deletes = [];
 const context = vm.createContext({
+  confirm: message => { confirmations.push(message); return confirmed; },
   document, navigator, location: {hash: '', origin: 'http://127.0.0.1:27893'},
   sessionStorage: {getItem: () => '', setItem() {}}, setInterval() {},
   Blob, atob, URL: {createObjectURL: () => 'blob:' + (++blobCounter), revokeObjectURL: url => revoked.push(url)},
@@ -59,7 +62,13 @@ const context = vm.createContext({
     assert.equal(options.headers.Authorization, 'Bearer operator');
     let data;
     if (url === '/api/setup') data = {capture_origin: captureOrigin, join_path: '/join?token=private'};
-    else if (options.method === 'POST') {
+    else if (options.method === 'DELETE') {
+      deletes.push(url);
+      if (deleteFails) return {ok: false, json: async () => ({error: 'Removal failed'})};
+      const id = url.split('/').pop();
+      devices = devices.filter(d => d.device_id !== id);
+      data = {ok: true, message: 'Phone removed; its sharing link is revoked.'};
+    } else if (options.method === 'POST') {
       const id = 'phone-' + devices.length;
       data = {device_id: id, name: 'Test phone', frame_id: null, capture_path: '/capture?token=' + id};
       devices.push(data);
@@ -133,7 +142,10 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
     assert.doesNotMatch(tile.querySelector('.status').textContent, /null ms/);
     const item = tile.querySelector('.device-link').children[0];
     assert.equal(item.children[1].children[0].href, 'https://192.168.1.2:27891' + devices[i].capture_path);
-    assert.equal(buttons(item)[0].textContent, 'Copy'); assert.equal(item.children[2].tagName, 'canvas');
+    assert.deepEqual(buttons(item).map(button => button.textContent), ['Copy', 'Remove']);
+    assert.equal(item.children[2].tagName, 'canvas');
+    assert.equal(tile.querySelector('.controls'), undefined);
+    assert.equal(tile.querySelector('form'), undefined);
   }
   assert.match(grid.children[0].querySelector('.status').textContent, /Pair iPhone/);
   assert.match(grid.children[1].querySelector('.status').textContent, /Paired; prepare/);
@@ -170,6 +182,29 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
     assert.equal(grid.children[i].querySelector('.device-link').firstChild.children[1].children[0].href,
       captureOrigin + devices[i].capture_path);
   }
+  // Removal asks the owner first, survives a failed request, then revokes this tile.
+  const removedTile = grid.children[0];
+  const remove = buttons(removedTile.querySelector('.device-link').firstChild).find(b => b.textContent === 'Remove');
+  await remove.onclick();
+  assert.equal(deletes.length, 0);
+  assert.match(confirmations[0], /Phone A/);
+  assert.match(confirmations[0], /sharing link will stop working/);
+  confirmed = true; deleteFails = true;
+  await remove.onclick();
+  assert.equal(grid.children[0], removedTile);
+  assert.equal(remove.disabled, false);
+  assert.equal(status.textContent, 'Removal failed');
+  deleteFails = false;
+  Object.assign(devices[0], {frame_id: 'frame-for-removal', capture_active: true, age_ms: 1});
+  await run('refresh()');
+  const removalURL = removedTile.querySelector('img').src;
+  await remove.onclick();
+  assert.equal(deletes.at(-1), '/api/devices/phone-a');
+  assert.ok(revoked.includes(removalURL));
+  assert.equal(grid.children.length, 3);
+  assert.equal(run("tiles.has('phone-a')"), false);
+  await run('refresh()');
+  assert.equal(grid.children.length, 3);
   devices = [];
   await run('refresh()');
   assert.equal(grid.children.length, 0);

@@ -16,13 +16,16 @@ PARAMETERS = {
 
 def tools():
     result = []
-    for name in ["list_devices", "get_device_status", "get_latest_screenshot", "stop_control", *sorted(ACTIONS)]:
+    for name in ["list_devices", "remove_device", "get_device_status", "get_latest_screenshot", "stop_control", *sorted(ACTIONS)]:
         props = {} if name == "list_devices" else {"device_id": {"type": "string"}}
         if name in ACTIONS:
             props["expected_frame_id"] = {"type": "string"}
             props.update({key: {"type": kind} for key, kind in PARAMETERS.get(name, {}).items()})
         result.append(dict(name=name, description=f"{name.replace('_', ' ')}. Choose a device explicitly; inspect each resulting screen. HID acceptance does not prove UI success.",
                            inputSchema=dict(type="object", properties=props, required=list(props), additionalProperties=False)))
+        if name == 'remove_device':
+            result[-1]['description'] = 'Remove the explicitly selected phone, revoke its sharing link and cancel control. Use only when the user requests removal; OS Bluetooth pairing is retained.'
+            result[-1]['annotations'] = dict(destructiveHint=True, readOnlyHint=False)
     return result
 
 
@@ -58,7 +61,9 @@ def handle(args, method, params):
             if not device.isalnum():
                 raise ValueError("Invalid device ID")
             path = f"/api/devices/{device}/"
-            if name == "get_device_status":
+            if name == "remove_device":
+                result = call(args, path.rstrip('/'), method='DELETE')
+            elif name == "get_device_status":
                 result = call(args, path + "status")
             elif name == "get_latest_screenshot":
                 result = call(args, path + "snapshot")
