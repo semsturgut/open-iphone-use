@@ -4,8 +4,8 @@
 
 **Give your AI agent a real iPhone to use.**
 
-Your Mac becomes a Bluetooth keyboard and mouse. Your iPhone shares its screen over
-Wi-Fi. Connect the two to any image-capable MCP agent.
+Receive iPhone screens over Wi-Fi and control them through Bluetooth HID.
+Run the new headless web server, or use the existing standalone Mac app.
 
 [Download 0.0.2](https://github.com/semsturgut/open-iphone-use/releases) ·
 [Website](https://semsturgut.github.io/open-iphone-use/) ·
@@ -17,7 +17,33 @@ Wi-Fi. Connect the two to any image-capable MCP agent.
 
 </div>
 
-## Requirements
+## Headless server and multi-phone web UI (source preview)
+
+The new server runs without the macOS app. It provides device-scoped screen sessions,
+a browser grid, CLI and stdio MCP on Python 3.11+. The macOS HID/calibration backend runs
+in separate native Swift helpers. The Mac app can optionally display the server UI.
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install ./server
+.venv/bin/open-iphone-use serve
+# In another terminal, retrieve the private UI login token:
+.venv/bin/open-iphone-use token
+```
+
+Open **http://127.0.0.1:27891**. Create one private sharing link per iPhone; each phone
+appears automatically after it starts uploading. LAN iPhone sharing requires trusted
+HTTPS (`serve --host LAN_IP --cert PEM --key PEM`) and owner approval. Use `devices` to
+list phones, `status --device ID` to inspect one, and `action --device ID …` for input.
+Register this environment's CLI with `mcp` for multi-device agent tools.
+
+Capture/viewing works without a HID adapter. Configure native macOS helpers explicitly
+for control. **Simultaneous physical multi-iPhone HID has not been verified.** Linux/Windows
+server code is portable but has not been run on those hosts; their HID backends are explicit
+unavailable stubs with implementation plans. No new release artifacts are provided.
+See [server setup, pairing, platform status and limits](docs/headless-server.md).
+
+## Requirements for the existing Mac release
 
 - **Just an iPhone and an Apple Silicon Mac or MacBook.** No additional hardware needed.
 - **No app installation on your iPhone.** Open the sharing link in Safari.
@@ -28,8 +54,8 @@ Wi-Fi. Connect the two to any image-capable MCP agent.
 and MCP server. No separate server installation is needed. Follow the
 [one-time setup](#get-started) to pair the phone, approve screen sharing and connect your agent.
 
-**Windows and Linux support are on the [roadmap](ROADMAP.md).** The current binary
-supports Apple Silicon macOS only.
+The existing downloadable binary supports Apple Silicon macOS only. The new portable
+server is available from source; native Linux and Windows HID support remains planned.
 
 ## See it work
 
@@ -60,7 +86,7 @@ when available in your client. Model selection is our practical recommendation, 
 compatibility guarantee or vendor endorsement. [OpenAI model capabilities](https://developers.openai.com/api/docs/models),
 [Claude model information](https://www.anthropic.com/news/models).
 
-## Get started
+## Get started with the standalone Mac app
 
 ### 1. Install and open the Mac app
 
@@ -215,12 +241,12 @@ Xcode 26.2 (including its SDK and Swift toolchain) and macOS are required to bui
 
 ## Roadmap
 
-- **Linux and Windows builds** — planned, not implemented.
+- **Linux and Windows** — portable source server implemented; native HID adapters and host validation pending.
 - **ESP32 support** — planned standalone Bluetooth HID control; target is an iPhone and
   ESP32 with no Mac/computer needed during use.
 - **Raspberry Pi support** — planned compact host for screen capture, MCP and device
   control without a Mac/PC in the setup.
-- **Multi-iPhone support** — planned; the current bridge controls one paired phone.
+- **Multi-iPhone support** — device-scoped web capture, credentials, routing and queues implemented; physical simultaneous HID validation pending.
 - Clean-machine compatibility tests, reconnect handling and a signed/notarized release.
 
 See [ROADMAP.md](ROADMAP.md). This repository starts with a new clean history for Open

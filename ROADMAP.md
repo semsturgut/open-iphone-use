@@ -1,9 +1,26 @@
 # Open iPhone Use roadmap
 
-The current scope is Mac + iPhone: native Mac app, bundled stdio MCP server, local screen
-sharing and Bluetooth HID. Implemented behavior and release readiness are separate.
+The source tree now includes a portable Python headless server and optional native Mac
+client, alongside the original standalone Mac path. Implemented code, automated checks,
+physical device evidence and release readiness are separate.
 
-## Demonstrated
+## Headless web preview
+
+- [x] CLI server, device enrollment/list/status/action commands and portable stdio MCP.
+- [x] Authenticated web grid; new device tiles appear on first upload.
+- [x] Separate device credentials, frame stores, queues, stale-frame guards and cancellation.
+- [x] Native Swift headless helper reusing existing CoreBluetooth/calibration code.
+- [x] Optional Mac app web client without starting the local radio/receiver.
+- [x] Explicit PEM TLS adapter and fail-closed BlueZ/Windows HID boundaries.
+- [x] Automated multi-device transport/control-isolation tests and synthetic native-helper checks.
+- [ ] Physical Safari sharing, calibration and HID validation on the new headless path.
+- [ ] Reliable simultaneous iPhone HID through one or multiple host radios; measure OS limits.
+- [ ] BlueZ GATT peripheral and Windows WinRT HID implementations and host test matrix.
+- [ ] Token rotation/revocation, Windows ACL tooling, streaming performance and packaging.
+
+See [headless server setup and platform status](docs/headless-server.md).
+
+## Previously demonstrated standalone Mac behavior
 
 - [x] Native Mac onboarding, automatic receiver/radio startup and live preview.
 - [x] Local HTTPS capture with a private Wi-Fi address, per-installation token and local CA.
@@ -21,10 +38,10 @@ sharing and Bluetooth HID. Implemented behavior and release readiness are separa
       should be enough to control the phone, with no Mac or computer needed at runtime.
 - [ ] **Raspberry Pi support.** Planned compact host for screen receiving, MCP and HID
       control; explore a setup that can run beside the iPhone without a Mac or PC.
-- [ ] **Linux and Windows builds.** Native transport/input support must be implemented
-      and tested per platform; the macOS bridge is not portable by changing a build flag.
-- [ ] **Multi-iPhone support.** Per-device pairing, capture credentials, calibration,
-      routing and action queues; the current version controls one phone.
+- [ ] **Linux and Windows distribution.** Portable HTTP/TLS, CLI, registry and MCP are
+      implemented; native HID remains stubbed. Build packages and test on each host.
+- [ ] **Multi-iPhone physical control.** The web server supports independent sessions and
+      native-helper routes; validate simultaneous radio/pairing behavior on real phones.
 
 ## After the experimental 0.0.1 release
 

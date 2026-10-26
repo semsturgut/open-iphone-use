@@ -1,3 +1,14 @@
+## Portable server preview
+
+The new headless path has a separate operator credential and per-device capture tokens,
+owner-private state, bounded frame uploads/queues, origin checks and mandatory TLS for
+LAN listeners. Capture tokens cannot issue control actions. Pairing identity must be bound
+explicitly before native input. Never publish capture links or state/backend config files.
+See [headless server security and platform limitations](docs/headless-server.md).
+The standard-library server is for a trusted private LAN/localhost, without internet-grade
+authentication or audit controls. Linux/Windows HID is unavailable; Windows ACLs and
+physical multi-phone radio behavior require further validation.
+
 # Security
 
 Only operate an iPhone you own or are authorized to control. Pairing, local certificate

@@ -1,8 +1,23 @@
 # Contributing
 
-Keep changes scoped to the Mac + iPhone architecture in [README.md](README.md).
-Use native Swift/SwiftUI. Preserve owner consent and inspect real UI outcomes when
+Follow the headless and standalone architectures in [README.md](README.md).
+Keep macOS/iOS native Swift; portable service code belongs in `server/`. Preserve owner consent and inspect real UI outcomes when
 claiming device behavior. Read [security](SECURITY.md) before changing capture or input.
+
+## Portable server checks
+
+```sh
+PYTHONPATH=server python3 -m unittest discover -s server/tests -v
+node --check server/oiu/web/app.js
+```
+
+The packaged capture page mirrors the native source; its equality test must pass after
+any edit. To check two real native helper processes without Bluetooth advertising:
+
+```sh
+swift build --package-path macos -c release
+PYTHONPATH=server python3 server/tests/native_smoke.py macos/.build/release/open-iphone-use-headless
+```
 
 ## Mac checks
 
@@ -14,7 +29,7 @@ node scripts/test-capture-page.mjs
 python3 scripts/test-agent-mcp.py .build/release/open-iphone-use-mcp
 ```
 
-## iPhone capture checks
+## Historical iPhone capture checks (only when an ios/ tree is present)
 
 ```sh
 swiftc ios/Shared/CaptureStore.swift ios/Tests/main.swift -o /tmp/open-iphone-use-capture-check
