@@ -14,6 +14,7 @@ from winrt.windows.devices.bluetooth.genericattributeprofile import (
 from winrt.windows.storage.streams import DataReader, DataWriter
 
 from ..hid import HID_UUID, REPORT_MAP, uuid
+from ..names import specific
 from .runtime import AsyncRadio
 
 
@@ -177,7 +178,7 @@ class WindowsRadio(AsyncRadio):
         device = None
         try:
             device = await asyncio.wait_for(BluetoothLEDevice.from_id_async(peer), 1)
-            name = (device.name or device.device_information.name) if device else None
+            name = (specific(device.device_information.name) or specific(device.name)) if device else None
             if name: self.peer_names[peer] = name
         except (OSError, asyncio.TimeoutError): pass
         finally:

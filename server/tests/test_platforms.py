@@ -259,7 +259,7 @@ class BluetoothNameTests(unittest.TestCase):
         a, b = '/org/bluez/hci0/dev_A', '/org/bluez/hci0/dev_B'
         async def objects():
             return {peer: {'org.bluez.Device1': {'Connected':Variant('b',True),'Paired':Variant('b',True),
-                'Name':Variant('s',name)}} for peer,name in ((a,'Real A'),(b,'Real B'))}
+                'Alias':Variant('s','iPhone'),'Name':Variant('s',name)}} for peer,name in ((a,'Real A'),(b,'Real B'))}
         async def check():
             radio=object.__new__(BlueZRadio)
             radio.manager=types.SimpleNamespace(call_get_managed_objects=objects)
@@ -276,8 +276,9 @@ class BluetoothNameTests(unittest.TestCase):
         looked_up=[]
         async def device(id_):
             looked_up.append(id_)
-            return types.SimpleNamespace(name='Real '+id_,close=lambda:None)
-        namespace={'asyncio':asyncio,'BluetoothLEDevice':types.SimpleNamespace(from_id_async=device)}
+            return types.SimpleNamespace(name='Real '+id_ if id_=='b' else 'iPhone',device_information=types.SimpleNamespace(name='Real '+id_ if id_=='a' else 'iPhone'),close=lambda:None)
+        from oiu.names import specific
+        namespace={'asyncio':asyncio,'BluetoothLEDevice':types.SimpleNamespace(from_id_async=device),'specific':specific}
         exec(compile(ast.Module(body=methods,type_ignores=[]),'<actual-winrt-peers>','exec'),namespace)
         async def check():
             clients=[types.SimpleNamespace(session=types.SimpleNamespace(device_id=types.SimpleNamespace(id=id_))) for id_ in ('a','b')]

@@ -13,6 +13,7 @@ from dbus_fast.constants import BusType, PropertyAccess
 from dbus_fast.service import ServiceInterface, method, dbus_property
 
 from ..hid import HID_UUID, REPORT_MAP, uuid
+from ..names import specific
 from .runtime import AsyncRadio
 
 SERVICE = 'org.bluez.GattService1'
@@ -217,9 +218,12 @@ class BlueZRadio(AsyncRadio):
 
     async def connected(self):
         objects = await self.manager.call_get_managed_objects()
-        self.peer_names = {path: (values['org.bluez.Device1'].get('Name') or values['org.bluez.Device1'].get('Alias')).value
-                           for path, values in objects.items() if 'org.bluez.Device1' in values
-                           and (values['org.bluez.Device1'].get('Name') or values['org.bluez.Device1'].get('Alias'))}
+        self.peer_names = {}
+        for path, values in objects.items():
+            data=values.get('org.bluez.Device1')
+            if data is None: continue
+            alias=data.get('Alias'); name=data.get('Name')
+            self.peer_names[path]=specific(alias.value if alias else None) or specific(name.value if name else None) or 'iPhone'
         return [path for path, values in objects.items() if 'org.bluez.Device1' in values
                 and values['org.bluez.Device1'].get('Connected', Variant('b', False)).value
                 and values['org.bluez.Device1'].get('Paired', Variant('b', False)).value]

@@ -1,5 +1,6 @@
 @preconcurrency import CoreBluetooth
 import Foundation
+import OpenIPhoneUseCore
 
 /// Never correlate a CoreBluetooth UUID to an unrelated classic Bluetooth address/name.
 /// Reverse-role retrieval is best effort: iOS need not expose a peripheral GAP service.
@@ -7,13 +8,13 @@ import Foundation
 final class PeerNameResolver: NSObject, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
     private var manager: CBCentralManager?
     private var wanted: Set<UUID> = []
-    private var attempted: Set<UUID> = []
+    private var attempts: [UUID: (Date, Int)] = [:]
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var names: [UUID: (String, String)] = [:]
     func start() { manager = CBCentralManager(delegate: self, queue: .main) }
     func name(_ id: UUID) -> (String, String) {
         wanted.insert(id); resolve()
-        return names[id] ?? ("iPhone (\(id.uuidString.suffix(4).lowercased()))", "fallback")
+        return names[id] ?? ("iPhone", "fallback")
     }
     func stop() {
         for peripheral in peripherals.values { manager?.cancelPeripheralConnection(peripheral) }
@@ -22,10 +23,14 @@ final class PeerNameResolver: NSObject, @preconcurrency CBCentralManagerDelegate
     func centralManagerDidUpdateState(_ central: CBCentralManager) { resolve() }
     private func resolve() {
         guard let manager, manager.state == .poweredOn else { return }
-        for id in wanted.subtracting(attempted) {
-            attempted.insert(id)
+        for id in wanted {
+            let previous = attempts[id] ?? (.distantPast, 0)
+            guard peripherals[id] == nil, previous.1 < 3, Date().timeIntervalSince(previous.0) >= 15 else { continue }
+            attempts[id] = (Date(), previous.1 + 1)
             guard let peripheral = manager.retrievePeripherals(withIdentifiers: [id]).first(where: { $0.identifier == id }) else { continue }
-            if let name = peripheral.name, !name.isEmpty { names[id] = (String(name.prefix(80)), "corebluetooth-cache"); continue }
+            if let name = BluetoothPeerName.specific(peripheral.name) { names[id] = (name, "corebluetooth-cache") }
+            // Even a cached "iPhone" label must not short-circuit the GAP read.
+            // The owner's full name can be available there while the cache is generic.
             peripherals[id] = peripheral; peripheral.delegate = self
             manager.connect(peripheral)
             Task { @MainActor [weak self, weak peripheral] in
@@ -56,7 +61,10 @@ final class PeerNameResolver: NSObject, @preconcurrency CBCentralManagerDelegate
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard error == nil, characteristic.uuid == CBUUID(string: "2A00"),
               let data = characteristic.value, let name = String(data: data, encoding: .utf8), !name.isEmpty else { return }
-        names[peripheral.identifier] = (String(name.prefix(80)), "gap-device-name")
+        if let specific = BluetoothPeerName.specific(name) {
+            names[peripheral.identifier] = (specific, "gap-device-name")
+            attempts[peripheral.identifier] = (Date(), 3)
+        }
         manager?.cancelPeripheralConnection(peripheral); peripherals.removeValue(forKey: peripheral.identifier)
     }
 }
