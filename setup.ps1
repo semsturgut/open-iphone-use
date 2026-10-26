@@ -6,7 +6,7 @@ param([switch]$Uninstall, [switch]$NoAgents,
       [string]$Ref = $(if ($env:OIU_REF) {$env:OIU_REF} else {'main'}))
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-function Run-Native([string]$Command, [string[]]$Arguments) {
+function Invoke-Native([string]$Command, [string[]]$Arguments) {
     & $Command @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Command failed with exit code $LASTEXITCODE" }
 }
@@ -19,7 +19,7 @@ $Launcher = Join-Path $BinDir 'open-iphone-use.exe'
 $Executable = Join-Path $InstallRoot 'venv\Scripts\open-iphone-use.exe'
 if ($Uninstall) {
     if (!(Test-Path $Marker)) {Write-Output 'No managed installation found'; exit 0}
-    Run-Native $Executable @('register-agents','--uninstall')
+    Invoke-Native $Executable @('register-agents','--uninstall')
     if ((Test-Path $Launcher) -and (Test-Path (Join-Path $InstallRoot 'launcher.sha256')) -and ((Get-FileHash $Launcher).Hash -eq (Get-Content (Join-Path $InstallRoot 'launcher.sha256') -Raw).Trim())) {Remove-Item $Launcher}
     # Remove only the PATH element setup owns, leaving all other entries intact.
     $PathMarker = Join-Path $InstallRoot 'added-user-path'
@@ -51,24 +51,28 @@ try {
     if (!(Test-Path (Join-Path $SourceDir 'server\pyproject.toml'))) {throw 'Invalid source checkout'}
     $Python = $null
     if (Get-Command py -ErrorAction SilentlyContinue) {
-        $Candidate = & py -3.12 -c 'import sys; print(sys.executable)' 2>$null
-        if ($LASTEXITCODE -eq 0) {$Python = $Candidate.Trim()}
+        # Windows PowerShell 5 can turn redirected native stderr into a terminating
+        # error. A missing interpreter is an expected probe failure, not setup failure.
+        try {
+            $Candidate = & py -3.12 -c 'import sys; print(sys.executable)' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $Candidate) {$Python = ($Candidate -join "`n").Trim()}
+        } catch { $Python = $null }
     }
     if (!$Python) {
         if (!(Get-Command winget -ErrorAction SilentlyContinue)) {throw 'Install CPython 3.12 from python.org (or install App Installer/winget), then re-run setup'}
-        Run-Native 'winget' @('install','--id','Python.Python.3.12','--exact','--scope','user','--accept-package-agreements','--accept-source-agreements')
+        Invoke-Native 'winget' @('install','--id','Python.Python.3.12','--exact','--scope','user','--accept-package-agreements','--accept-source-agreements')
         $Candidates = @((Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'),(Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\python3.12.exe'))
         $Python = $Candidates | Where-Object {Test-Path $_} | Select-Object -First 1
         if (!$Python) {throw 'Python installed; open a new PowerShell and re-run setup so its launcher is available'}
     }
-    Run-Native $Python @('-m','venv',(Join-Path $InstallRoot 'venv'))
+    Invoke-Native $Python @('-m','venv',(Join-Path $InstallRoot 'venv'))
     $VenvPython = Join-Path $InstallRoot 'venv\Scripts\python.exe'
-    Run-Native $VenvPython @('-m','pip','install','--upgrade','pip')
+    Invoke-Native $VenvPython @('-m','pip','install','--upgrade','pip')
     # The native HID provider is PyWinRT's compiled WinRT bindings, installed by platform markers.
-    Run-Native $VenvPython @('-m','pip','install','--upgrade',(Join-Path $SourceDir 'server'))
+    Invoke-Native $VenvPython @('-m','pip','install','--upgrade',(Join-Path $SourceDir 'server'))
     $Skill = Join-Path $InstallRoot 'SKILL.md'
     Copy-Item (Join-Path $SourceDir 'macos\Resources\open-iphone-use-skill\SKILL.md') $Skill -Force
-    if (!$NoAgents) {Run-Native $Executable @('register-agents','--skill',$Skill)}
+    if (!$NoAgents) {Invoke-Native $Executable @('register-agents','--skill',$Skill)}
     # pip's native console launcher embeds the venv Python path; copying it preserves
     # Unicode paths and avoids execution-policy changes or lossy .cmd wrappers.
     Copy-Item $Executable ($Launcher + '.new') -Force
