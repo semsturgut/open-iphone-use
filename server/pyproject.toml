@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-iphone-use-server"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "Portable, local multi-iPhone capture and control server"
+
+[project.scripts]
+open-iphone-use = "oiu.cli:main"
+
+[tool.setuptools.package-data]
+oiu = ["web/*"]

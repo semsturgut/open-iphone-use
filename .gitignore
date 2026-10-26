@@ -19,3 +19,8 @@ __pycache__/
 dist/
 *.dmg
 *.dmg.sha256
+
+# Portable server environments and local state
+.venv/
+*.egg-info/
+.open-iphone-use/
