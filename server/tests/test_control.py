@@ -93,6 +93,36 @@ class ControlTests(unittest.TestCase):
         self.assertTrue(result['ok'],result)
         self.assertTrue(self.radio.calls)
         self.assertTrue(all(call[0]=='phone-a' for call in self.radio.calls))
+    def test_stop_cancels_shared_pairing_probe_and_closes_all_boards(self):
+        self.radio.positions['phone-b']=[0,0]
+        other=Control(self.pairing,Path(self.tmp.name)/'b')
+        self.radio.engines['phone-b']=other
+        deadline=time.monotonic()+2
+        while not other.at and time.monotonic()<deadline: time.sleep(.01)
+        entered=threading.Event(); resume=threading.Event()
+        original=self.radio.send
+        def blocking_send(peer,report,payload):
+            if not entered.is_set():
+                entered.set()
+                if not resume.wait(3): raise OSError('Test probe timed out')
+            original(peer,report,payload)
+        self.radio.send=blocking_send
+        result=[]
+        thread=threading.Thread(target=lambda:result.append(self.engine.request('ensure_session')))
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(3),'Association did not reach its probe')
+            self.engine.stop_capture()
+        finally:
+            resume.set(); thread.join(4)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(result[0]['ok'])
+        self.assertIn('canceled',result[0]['message'])
+        movements=[p for _,r,p in self.radio.calls if r==2 and any(p[1:])]
+        self.assertLessEqual(len(movements),1)
+        self.assertFalse(self.engine.board_open)
+        self.assertFalse(other.board_open)
+
     def test_stale_and_invalid_text_send_no_nonzero_reports(self):
         self.engine.bind('phone-a')
         self.assertFalse(self.engine.request('type_text',text='🙂')['ok'])
