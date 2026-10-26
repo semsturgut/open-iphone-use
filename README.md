@@ -58,6 +58,12 @@ Bluetooth UUID configuration is required.
    browsers, **Copy** to copy it, or scan its QR code with the iPhone camera.
    **Create sharing link** makes a named phone link with the same controls. Share is
    hidden when the browser has no system sharing API; Copy remains available.
+   Every registered phone (including `open-iphone-use add`) appears immediately in the
+   side-by-side grid with a **Waiting for screen sharing** placeholder and control/pairing
+   status. Each tile keeps its own sharing link, Share, Copy and QR controls after refresh
+   and server restart. Links are private capture credentials, returned only to an
+   authenticated operator by `GET /api/devices` as `capture_path`; the server retains
+   their tokens in its private `state.json` (0600).
 2. Install the public CA on each iPhone, checking its fingerprint against the terminal,
    and explicitly enable it under **Settings → General → About → Certificate Trust Settings**.
    The public certificate can be downloaded from the printed HTTP link or transferred
@@ -68,7 +74,7 @@ Bluetooth UUID configuration is required.
    Linux, the server asks the owner to confirm pairing codes in its terminal.
 4. Open the same printed **private HTTPS sharing invitation** in Safari on each iPhone.
    Each browser gets its own device identity and capture token. Tap **Start sharing** and
-   approve iOS sharing. New screens appear automatically as separate tiles.
+   approve iOS sharing. The live screen replaces that phone’s placeholder in the same tile.
 5. Use **Prepare** in a tile, or ask your MCP agent to prepare that device. Keep Safari
    visible while the pointer is measured. Bluetooth peers are associated automatically;
    no central IDs need to be copied. Then tap the screen, type, use keyboard shortcuts

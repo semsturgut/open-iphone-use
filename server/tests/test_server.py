@@ -109,6 +109,40 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(reloaded.devices[self.a.id].active)
         self.assertEqual(self.registry.path.stat().st_mode & 0o777, 0o600)
 
+    def test_registered_devices_have_private_persistent_links_before_frames(self):
+        created = self.api('/api/devices', json.dumps({'name': 'Phone C'}).encode())
+        before = self.api('/api/devices')
+        self.assertEqual(len(before), 3)
+        for device in before:
+            self.assertIsNone(device['frame_id'])
+            self.assertFalse(device['capture_active'])
+            self.assertIn('control_status', device)
+            self.assertEqual(device['capture_path'],
+                             '/capture?token=' + self.registry.devices[device['device_id']].token)
+        self.assertEqual(created['capture_path'], before[-1]['capture_path'])
+        for headers in ({}, {'Authorization': 'Bearer invalid'},
+                        {'Authorization': 'Bearer ' + self.a.token},
+                        {'Authorization': 'Bearer ' + self.registry.invite_token}):
+            with self.subTest(headers=list(headers)), self.assertRaises(HTTPError) as error:
+                urlopen(Request(self.url + '/api/devices', headers=headers), timeout=2)
+            self.assertEqual(error.exception.code, 401)
+            self.assertNotIn(self.a.token.encode(), error.exception.read())
+            error.exception.close()
+        # Recreate the registry and read the links through the authenticated API.
+        self.server.registry = Registry(self.tmp.name)
+        after = self.api('/api/devices')
+        self.assertEqual([(d['device_id'], d['capture_path']) for d in after],
+                         [(d['device_id'], d['capture_path']) for d in before])
+        with urlopen(self.url + created['capture_path'], timeout=2) as response:
+            self.assertEqual(response.status, 200)
+        self.assertEqual(self.registry.path.stat().st_mode & 0o777, 0o600)
+        # Recover owner-only permissions even if a leftover temp file was too open.
+        temporary = self.registry.path.with_suffix('.tmp')
+        temporary.write_text('{}')
+        temporary.chmod(0o644)
+        self.registry.save()
+        self.assertEqual(self.registry.path.stat().st_mode & 0o777, 0o600)
+
     def test_cross_device_and_stale_frames_cannot_control(self):
         self.a.upload(JPEG)
         self.b.upload(JPEG)

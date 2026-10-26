@@ -9,6 +9,23 @@ class Element {
   replaceChildren(...children) { this.children = []; this.append(...children); }
   get firstChild() { return this.children[0]; }
   setAttribute(key, value) { this[key] = value; }
+  removeAttribute(key) { delete this[key]; }
+  set innerHTML(markup) {
+    // Only the fixed tile template is parsed; dynamic values use textContent.
+    this.children = [];
+    for (const match of markup.matchAll(/<(h2|p|img|div|form|input|button)\b([^>]*)>/g)) {
+      const child = new Element(match[1]);
+      child.className = /class="([^"]*)"/.exec(match[2])?.[1] || '';
+      child.hidden = /\bhidden\b/.test(match[2]);
+      this.append(child);
+    }
+  }
+  querySelector(selector) {
+    return this.children.find(child => selector.startsWith('.')
+      ? child.className === selector.slice(1) : child.tagName === selector);
+  }
+  classList = {toggle() {}};
+  async decode() {}
   focus() { document.activeElement = this; }
   select() { this.focus(); selected = this.value; }
   remove() { this.parent.children = this.parent.children.filter(child => child !== this); }
@@ -24,13 +41,31 @@ const document = {
 };
 const navigator = {};
 const requests = [];
+let devices = [
+  {device_id: 'phone-a', name: 'Phone A', frame_id: null, age_ms: null, capture_active: false,
+   control_status: 'Pair iPhone, then Prepare', capture_path: '/capture?token=phone-a'},
+  {device_id: 'phone-b', name: 'Phone B', frame_id: null, age_ms: null, capture_active: false,
+   control_status: 'Paired; prepare pointer', capture_path: '/capture?token=phone-b'}
+];
+const revoked = [];
+let blobCounter = 0;
 const context = vm.createContext({
   document, navigator, location: {hash: '', origin: 'http://127.0.0.1:27893'},
   sessionStorage: {getItem: () => '', setItem() {}}, setInterval() {},
+  Blob, atob, URL: {createObjectURL: () => 'blob:' + (++blobCounter), revokeObjectURL: url => revoked.push(url)},
   fetch: async (url, options) => {
     requests.push(url);
-    const data = url === '/api/setup' ? {capture_origin: 'https://192.168.1.2:27891', join_path: '/join?token=private'}
-      : options.method === 'POST' ? {name: 'Test phone', capture_path: '/capture?token=phone'} : [];
+    assert.equal(options.headers.Authorization, 'Bearer operator');
+    let data;
+    if (url === '/api/setup') data = {capture_origin: 'https://192.168.1.2:27891', join_path: '/join?token=private'};
+    else if (options.method === 'POST') {
+      const id = 'phone-' + devices.length;
+      data = {device_id: id, name: 'Test phone', frame_id: null, capture_path: '/capture?token=' + id};
+      devices.push(data);
+    } else if (url.endsWith('/snapshot')) {
+      const device = devices.find(d => url.includes('/' + d.device_id + '/'));
+      data = {frame: {frameID: device.frame_id, base64: 'aW1hZ2U='}};
+    } else data = devices;
     return {ok: true, json: async () => data};
   }
 });
@@ -85,11 +120,50 @@ const buttons = root => root.children[1].children.filter(child => child.tagName 
     document.getElementById('name').value = 'Test phone';
     await document.getElementById('add').onsubmit({preventDefault() {}});
   }
-  const invite = document.getElementById('invite');
-  assert.equal(invite.children.length, 2);
-  for (const item of invite.children) {
-    assert.equal(item.children[1].children[0].href, 'https://192.168.1.2:27891/capture?token=phone');
+  const grid = document.getElementById('grid');
+  assert.equal(grid.children.length, 4); // Includes registered phones that never uploaded.
+  assert.equal(document.getElementById('empty').hidden, true);
+  assert.equal(requests.filter(url => url.endsWith('/snapshot')).length, 0);
+  for (let i = 0; i < devices.length; i++) {
+    const tile = grid.children[i];
+    assert.equal(tile.querySelector('.placeholder').hidden, false);
+    assert.equal(tile.querySelector('img').hidden, true);
+    assert.match(tile.querySelector('.status').textContent, /Waiting for screen sharing/);
+    assert.doesNotMatch(tile.querySelector('.status').textContent, /null ms/);
+    const item = tile.querySelector('.device-link').children[0];
+    assert.equal(item.children[1].children[0].href, 'https://192.168.1.2:27891' + devices[i].capture_path);
     assert.equal(buttons(item)[0].textContent, 'Copy'); assert.equal(item.children[2].tagName, 'canvas');
   }
+  assert.match(grid.children[0].querySelector('.status').textContent, /Pair iPhone/);
+  assert.match(grid.children[1].querySelector('.status').textContent, /Paired; prepare/);
+  // Frame ingress upgrades the same tile and keeps its sharing controls intact.
+  const firstTile = grid.children[0], firstLink = firstTile.querySelector('.device-link').firstChild;
+  Object.assign(devices[0], {frame_id: 'frame-1', capture_active: true, age_ms: 1});
+  await run('refresh()');
+  assert.equal(grid.children[0], firstTile);
+  assert.equal(firstTile.querySelector('.placeholder').hidden, true);
+  assert.equal(firstTile.querySelector('img').hidden, false);
+  assert.equal(firstTile.querySelector('.device-link').firstChild, firstLink);
+  assert.equal(run("tiles.get('phone-a').frame"), 'frame-1');
+  await run('refresh()');
+  assert.equal(requests.filter(url => url.endsWith('/snapshot')).length, 1);
+  // After a restart, no frames remain but every phone and its link still does.
+  Object.assign(devices[0], {frame_id: null, capture_active: false, age_ms: null});
+  await run('refresh()');
+  assert.equal(firstTile.querySelector('img').hidden, true);
+  assert.equal(firstTile.querySelector('.placeholder').hidden, false);
+  assert.ok(revoked.includes('blob:1'));
+  // Simulate a fresh page: no retained tiles or creation responses.
+  grid.replaceChildren(); run('tiles.clear()'); join.replaceChildren();
+  await run('refresh()');
+  assert.equal(grid.children.length, 4);
+  for (let i = 0; i < devices.length; i++) {
+    assert.equal(grid.children[i].querySelector('.device-link').firstChild.children[1].children[0].href,
+      'https://192.168.1.2:27891' + devices[i].capture_path);
+  }
+  devices = [];
+  await run('refresh()');
+  assert.equal(grid.children.length, 0);
+  assert.equal(document.getElementById('empty').hidden, false);
   console.log('Web sharing controls passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

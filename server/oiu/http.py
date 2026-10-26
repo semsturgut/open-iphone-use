@@ -168,7 +168,10 @@ class Handler(BaseHTTPRequestHandler):
                 if post:
                     device = registry.create(json.loads(self.body(4096))["name"])
                     return self.reply(dict(device_id=device.id, capture_path=f"/capture?token={device.token}"))
-                return self.reply(registry.list())
+                # Capture links are credentials: expose them only after admin().
+                with registry.lock:
+                    return self.reply([dict(d.summary(), capture_path=f"/capture?token={d.token}")
+                                       for d in registry.devices.values()])
             parts = path.path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "devices"]:
                 device = registry.devices[parts[2]]

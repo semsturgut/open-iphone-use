@@ -73,16 +73,15 @@ $('add').onsubmit = async event => {
   event.preventDefault();
   $('error').textContent = '';
   try {
-    const device = await api('/api/devices', {name: $('name').value});
-    $('invite').append(sharingLink(`Private sharing link for ${device.name || $('name').value}:`, captureOrigin + device.capture_path));
+    await api('/api/devices', {name: $('name').value});
     $('name').value = ''; await refresh();
   } catch (error) { failure(error); }
 };
 function tile(device) {
   const root = document.createElement('article'); root.className = 'phone';
   // Static markup only. Names, IDs and backend errors are always textContent.
-  root.innerHTML = '<h2></h2><p class="status"></p><img class="screen" alt="Live iPhone screen" hidden><div class="controls"></div><form><input aria-label="Text to type" placeholder="Text to type" maxlength="500"><button>Type</button></form><p class="result" role="status"></p>';
-  const value = {root, device, url: null, frame: null};
+  root.innerHTML = '<h2></h2><p class="status"></p><p class="placeholder" role="status">Waiting for screen sharing</p><img class="screen" alt="Live iPhone screen" hidden><div class="device-link"></div><div class="controls"></div><form><input aria-label="Text to type" placeholder="Text to type" maxlength="500"><button>Type</button></form><p class="result" role="status"></p>';
+  const value = {root, device, url: null, frame: null, sharingURL: null};
   const act = async (operation, arguments_ = {}) => {
     try {
       const result = await api(`/api/devices/${value.device.device_id}/action`, {operation, arguments: {expectedFrameID: value.frame, ...arguments_}});
@@ -111,21 +110,45 @@ async function refresh() {
     }
     $('login').hidden = true; $('workspace').hidden = false;
     $('count').textContent = `${devices.filter(d => d.capture_active).length} sharing / ${devices.length} phones`;
-    $('empty').hidden = devices.some(d => d.frame_id);
+    $('empty').hidden = devices.length > 0;
+    const ids = new Set(devices.map(d => d.device_id));
+    for (const [id, t] of tiles) {
+      if (!ids.has(id)) {
+        if (t.url) URL.revokeObjectURL(t.url);
+        t.root.remove(); tiles.delete(id);
+      }
+    }
     for (const d of devices) {
-      if (!d.frame_id) continue; // A tile appears automatically on first upload.
       if (!tiles.has(d.device_id)) tiles.set(d.device_id, tile(d));
       const t = tiles.get(d.device_id); t.device = d;
       t.root.querySelector('h2').textContent = d.name;
       t.root.classList.toggle('live', d.capture_active);
-      t.root.querySelector('.status').textContent = `${d.device_id.slice(0,8)} • ${d.capture_active ? 'Live' : 'Sharing paused'} • ${d.age_ms} ms\n${d.control_status || "Control unavailable"}`;
-      if (t.frame !== d.frame_id) {
-        // Use snapshot metadata and JPEG atomically so a click references the image displayed.
-        const snapshot = await api(`/api/devices/${d.device_id}/snapshot`);
-        const bytes = Uint8Array.from(atob(snapshot.frame.base64), c => c.charCodeAt(0));
-        const next = URL.createObjectURL(new Blob([bytes], {type: 'image/jpeg'}));
-        const img = t.root.querySelector('img'); img.src = next; await img.decode(); img.hidden = false;
-        if (t.url) URL.revokeObjectURL(t.url); t.url = next; t.frame = snapshot.frame.frameID;
+      const sharingState = !d.frame_id ? 'Waiting for screen sharing' : d.capture_active ? 'Live' : 'Sharing paused';
+      t.root.querySelector('.status').textContent = `${d.device_id.slice(0,8)} • ${sharingState}${d.age_ms == null ? '' : ` • ${d.age_ms} ms`}\n${d.control_status || 'Control unavailable'}`;
+      t.root.querySelector('.placeholder').hidden = !!d.frame_id;
+      const sharingURL = captureOrigin + d.capture_path;
+      if (t.sharingURL !== sharingURL) {
+        t.root.querySelector('.device-link').replaceChildren(sharingLink(`Private sharing link for ${d.name}:`, sharingURL));
+        t.sharingURL = sharingURL;
+      }
+      if (!d.frame_id) {
+        const img = t.root.querySelector('img'); img.hidden = true; img.removeAttribute('src');
+        if (t.url) URL.revokeObjectURL(t.url);
+        t.url = null; t.frame = null;
+      }
+    }
+    // Render every registered phone before waiting for any live snapshot.
+    for (const d of devices) {
+      const t = tiles.get(d.device_id);
+      if (d.frame_id && t.frame !== d.frame_id) {
+        try {
+          // Use snapshot metadata and JPEG atomically so a click references the image displayed.
+          const snapshot = await api(`/api/devices/${d.device_id}/snapshot`);
+          const bytes = Uint8Array.from(atob(snapshot.frame.base64), c => c.charCodeAt(0));
+          const next = URL.createObjectURL(new Blob([bytes], {type: 'image/jpeg'}));
+          const img = t.root.querySelector('img'); img.src = next; await img.decode(); img.hidden = false;
+          if (t.url) URL.revokeObjectURL(t.url); t.url = next; t.frame = snapshot.frame.frameID;
+        } catch (error) { t.root.querySelector('.result').textContent = error.message; }
       }
     }
   } catch (error) {failure(error); if (error.message.includes('credential')) {$('login').hidden = false; $('workspace').hidden = true;}}
