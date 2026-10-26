@@ -1,7 +1,9 @@
 'use strict';
-let token = sessionStorage.getItem('oiu-token') || '';
+let token = location.hash.slice(1) || sessionStorage.getItem('oiu-token') || '';
+if (location.hash) { sessionStorage.setItem('oiu-token', token); history.replaceState(null, '', location.pathname); }
 const $ = id => document.getElementById(id);
 const tiles = new Map();
+let captureOrigin = location.origin;
 async function api(path, body, image = false) {
   const res = await fetch(path, {headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'}, ...(body ? {method: 'POST', body: JSON.stringify(body)} : {})});
   if (!res.ok) { const result = await res.json(); throw new Error(result.error || res.status); }
@@ -14,7 +16,7 @@ $('add').onsubmit = async event => {
   try {
     const device = await api('/api/devices', {name: $('name').value});
     const link = document.createElement('a');
-    link.href = device.capture_path; link.textContent = location.origin + device.capture_path;
+    link.href = captureOrigin + device.capture_path; link.textContent = captureOrigin + device.capture_path;
     $('invite').replaceChildren(document.createTextNode('Private sharing link for this phone: '), link);
     $('name').value = ''; await refresh();
   } catch (error) { failure(error); }
@@ -45,6 +47,13 @@ async function refresh() {
   refreshing = true;
   try {
     const devices = await api('/api/devices');
+    if (!$('join').firstChild) {
+      const setup = await api('/api/setup');
+      captureOrigin = setup.capture_origin || location.origin;
+      const link = document.createElement('a'); link.href = captureOrigin + setup.join_path;
+      link.textContent = captureOrigin + setup.join_path;
+      $('join').replaceChildren(document.createTextNode('Open this private link in Safari on each iPhone: '), link);
+    }
     $('login').hidden = true; $('workspace').hidden = false; $('error').textContent = '';
     $('count').textContent = `${devices.filter(d => d.capture_active).length} sharing / ${devices.length} phones`;
     $('empty').hidden = devices.some(d => d.frame_id);
@@ -54,7 +63,7 @@ async function refresh() {
       const t = tiles.get(d.device_id); t.device = d;
       t.root.querySelector('h2').textContent = d.name;
       t.root.classList.toggle('live', d.capture_active);
-      t.root.querySelector('.status').textContent = `${d.capture_active ? 'Live' : 'Sharing paused'} • ${d.age_ms} ms\n${d.control_status || "Control unavailable"}`;
+      t.root.querySelector('.status').textContent = `${d.device_id.slice(0,8)} • ${d.capture_active ? 'Live' : 'Sharing paused'} • ${d.age_ms} ms\n${d.control_status || "Control unavailable"}`;
       if (t.frame !== d.frame_id) {
         // Use snapshot metadata and JPEG atomically so a click references the image displayed.
         const snapshot = await api(`/api/devices/${d.device_id}/snapshot`);

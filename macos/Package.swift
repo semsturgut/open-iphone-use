@@ -39,7 +39,7 @@ let package = Package(
         ),
         .executableTarget(name: "OpenIPhoneUseCLI"),
         .executableTarget(
-            name: "OpenIPhoneUseHeadless", dependencies: ["OpenIPhoneUseCore"],
+            name: "OpenIPhoneUseHeadless", dependencies: ["OpenIPhoneUseCore", "ObjCExceptionCatcher"],
             exclude: ["Info.plist"],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
                                           "-Xlinker", "__info_plist", "-Xlinker", headlessInfoPath])]

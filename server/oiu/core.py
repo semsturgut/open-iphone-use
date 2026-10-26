@@ -9,7 +9,8 @@ import threading
 import time
 import uuid
 
-from .backends import UnavailableBackend
+from .backends import CaptureOnlyBackend
+from .permissions import secure_directory
 
 MAX_FRAME = 4 * 1024 * 1024
 ACTIONS = {"move_pointer", "click", "scroll", "type_text", "send_key", "pointer_tap",
@@ -22,7 +23,7 @@ class Device:
     id: str
     name: str
     token: str
-    backend: object = field(default_factory=UnavailableBackend)
+    backend: object = field(default_factory=CaptureOnlyBackend)
     jpeg: bytes = b""
     frame_id: str | None = None
     at: float = 0
@@ -90,9 +91,7 @@ class Device:
 
 class Registry:
     def __init__(self, directory):
-        self.directory = Path(directory)
-        self.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
-        os.chmod(self.directory, 0o700)
+        self.directory = secure_directory(directory)
         self.lock = threading.RLock()
         self.path = self.directory / "state.json"
         if self.path.exists():
@@ -100,12 +99,14 @@ class Registry:
         else:
             saved = {"admin_token": secrets.token_hex(32), "devices": []}
         self.admin_token = saved["admin_token"]
+        self.invite_token = saved.get("invite_token", secrets.token_hex(32))
+        self.backend_factory = None
         self.devices = {d["id"]: Device(**d) for d in saved["devices"]}
         self.save()
 
     def save(self):
         with self.lock:
-            data = dict(admin_token=self.admin_token, devices=[dict(id=d.id, name=d.name, token=d.token)
+            data = dict(admin_token=self.admin_token, invite_token=self.invite_token, devices=[dict(id=d.id, name=d.name, token=d.token)
                                                               for d in self.devices.values()])
             temporary = self.path.with_suffix(".tmp")
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -120,6 +121,7 @@ class Registry:
             if len(self.devices) >= 64:
                 raise ValueError("64-device limit reached")
             device = Device(uuid.uuid4().hex, name.strip(), secrets.token_hex(32))
+            if self.backend_factory: device.backend = self.backend_factory(device)
             self.devices[device.id] = device
             self.save()
             return device

@@ -25,7 +25,7 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, registry, context=None):
+    def __init__(self, address, registry, context=None, watchdog=True):
         self.registry = registry
         self.capacity = threading.BoundedSemaphore(64)
         self.stopped = threading.Event()
@@ -33,7 +33,7 @@ class Server(ThreadingHTTPServer):
         if context:
             self.socket = context.wrap_socket(self.socket, server_side=True, do_handshake_on_connect=False)
         self.watchdog = threading.Thread(target=self._watch, daemon=True)
-        self.watchdog.start()
+        if watchdog: self.watchdog.start()
 
     def _watch(self):
         while not self.stopped.wait(.25):
@@ -122,7 +122,18 @@ class Handler(BaseHTTPRequestHandler):
                 file = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}[path.path]
                 mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css"}[path.path]
                 return self.reply((WEB / file).read_bytes(), mime=mime)
-            if path.path == "/capture" or path.path in ("/api/frame", "/api/stop", "/api/tap", "/api/calibrate"):
+            if path.path == "/join" and not post:
+                token = parse_qs(path.query).get('token', [''])[0]
+                if not secrets.compare_digest(token, registry.invite_token): raise PermissionError('Invalid invitation')
+                return self.reply((WEB/'join.html').read_bytes(), mime='text/html')
+            if path.path == '/api/enroll' and post:
+                token = self.headers.get('X-Open-iPhone-Use-Invite', '')
+                if not secrets.compare_digest(token, registry.invite_token): raise PermissionError('Invalid invitation')
+                data = json.loads(self.body(4096))
+                with registry.lock:
+                    device = registry.create(data.get('name', f'iPhone {len(registry.devices)+1}'))
+                return self.reply(dict(capture_path=f'/capture?token={device.token}'))
+            if path.path == "/capture" or path.path in ("/api/frame", "/api/stop", "/api/tap", "/api/calibrate", "/api/pointer"):
                 token = (parse_qs(path.query).get("token", [""])[0] if path.path == "/capture"
                          else self.headers.get("X-Open-iPhone-Use-Token", ""))
                 device = registry.capture_device(token)
@@ -136,15 +147,23 @@ class Handler(BaseHTTPRequestHandler):
                 if path.path == "/api/stop":
                     device.stop()
                     return self.reply({"ok": True})
+                if path.path == '/api/pointer':
+                    data = json.loads(body)
+                    return self.reply(device.backend.request('capture_pointer', epoch=data.get('epoch')))
                 if path.path == "/api/tap":
                     data = json.loads(body)
                     x, y = float(data["x"]), float(data["y"])
                     if not (0 <= x <= 1 and 0 <= y <= 1):
                         raise ValueError("Tap outside screen")
                     return self.reply(device.backend.request("capture_tap", x=x, y=y))
-                # Share-start readiness is read-only. Agent/operator explicitly prepares input.
+                data = json.loads(body or b'{}')
+                if data.get('force') is True:
+                    return self.reply(device.action('prepare_session', {'expectedFrameID': device.frame_id}))
+                # Share-start readiness is read-only. A calibration button is explicit input consent.
                 return self.reply({"ok": False, "message": "Sharing active. Use Prepare in the control grid to check calibration."})
             self.admin()
+            if path.path == '/api/setup' and not post:
+                return self.reply(dict(join_path=f'/join?token={registry.invite_token}',capture_origin=getattr(registry,'public_url','')))
             if path.path == "/api/devices":
                 if post:
                     device = registry.create(json.loads(self.body(4096))["name"])

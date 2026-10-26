@@ -2,12 +2,11 @@
 
 The new headless path has a separate operator credential and per-device capture tokens,
 owner-private state, bounded frame uploads/queues, origin checks and mandatory TLS for
-LAN listeners. Capture tokens cannot issue control actions. Pairing identity must be bound
+LAN listeners. Capture tokens cannot issue arbitrary input; they can upload their own frames/feedback, stop their stream, and explicitly request board-gated pointer preparation from the Safari calibration button. Pairing identity must be bound
 explicitly before native input. Never publish capture links or state/backend config files.
 See [headless server security and platform limitations](docs/headless-server.md).
 The standard-library server is for a trusted private LAN/localhost, without internet-grade
-authentication or audit controls. Linux/Windows HID is unavailable; Windows ACLs and
-physical multi-phone radio behavior require further validation.
+authentication or audit controls. Linux/Windows HID is implemented but not yet hardware-verified; OS policies and physical multi-phone radio behavior require validation. The generated CA is never automatically trusted: verify its fingerprint or transfer it over an authenticated channel before owner approval. The localhost operator listener is loopback-only; the separate plaintext bootstrap serves public certificate bytes only. Windows state receives an owner/SYSTEM ACL. Installer backups are private and uninstall preserves user-edited registrations.
 
 # Security
 

@@ -1,7 +1,7 @@
 # Open iPhone Use roadmap
 
 The source tree now includes a portable Python headless server and optional native Mac
-client, alongside the original standalone Mac path. Implemented code, automated checks,
+client and real platform HID transports, alongside the original standalone Mac path. Implemented code, automated checks,
 physical device evidence and release readiness are separate.
 
 ## Headless web preview
@@ -11,11 +11,15 @@ physical device evidence and release readiness are separate.
 - [x] Separate device credentials, frame stores, queues, stale-frame guards and cancellation.
 - [x] Native Swift headless helper reusing existing CoreBluetooth/calibration code.
 - [x] Optional Mac app web client without starting the local radio/receiver.
-- [x] Explicit PEM TLS adapter and fail-closed BlueZ/Windows HID boundaries.
+- [x] Automatic local CA, renewable LAN HTTPS, localhost operator UI and public certificate bootstrap.
+- [x] Real encrypted BlueZ and WinRT HID services with targeted/guarded notification routing.
+- [x] Shared multi-central CoreBluetooth helper and common per-device control/calibration engine.
+- [x] Automatic browser enrollment and screen-to-peer association without UUID configuration.
+- [x] Idempotent POSIX/PowerShell setup, runtime/dependency installation, agent registration and uninstall.
 - [x] Automated multi-device transport/control-isolation tests and synthetic native-helper checks.
 - [ ] Physical Safari sharing, calibration and HID validation on the new headless path.
 - [ ] Reliable simultaneous iPhone HID through one or multiple host radios; measure OS limits.
-- [ ] BlueZ GATT peripheral and Windows WinRT HID implementations and host test matrix.
+- [ ] Hardware verification of the implemented BlueZ/WinRT HID paths and host/driver test matrix.
 - [ ] Token rotation/revocation, Windows ACL tooling, streaming performance and packaging.
 
 See [headless server setup and platform status](docs/headless-server.md).
@@ -39,7 +43,7 @@ See [headless server setup and platform status](docs/headless-server.md).
 - [ ] **Raspberry Pi support.** Planned compact host for screen receiving, MCP and HID
       control; explore a setup that can run beside the iPhone without a Mac or PC.
 - [ ] **Linux and Windows distribution.** Portable HTTP/TLS, CLI, registry and MCP are
-      implemented; native HID remains stubbed. Build packages and test on each host.
+      implemented; native HID is implemented but not yet hardware-verified. Validate packages and test on each host.
 - [ ] **Multi-iPhone physical control.** The web server supports independent sessions and
       native-helper routes; validate simultaneous radio/pairing behavior on real phones.
 

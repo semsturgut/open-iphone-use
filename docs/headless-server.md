@@ -1,207 +1,158 @@
-# Headless, web and multi-device server (source preview)
+# Headless server and platform setup
 
-The portable server runs without `Open iPhone Use.app`. Python 3.11+ owns HTTP/TLS,
-credentials, screen sessions, device routing, action queues, web assets and MCP. Python's
-standard library was chosen to run unchanged on macOS, Linux and Windows without a
-native Swift runtime or Node dependency. Swift remains the macOS HID/calibration adapter.
-No new AI/model service or cloud account is required.
+The primary workflow is `setup.sh` / `setup.ps1` → `open-iphone-use serve` → browser grid.
+The native Mac app is optional. The portable service implements HTTPS capture, credentials,
+peer association, calibration, serialized input, CLI and stdio MCP. Each host has one native
+radio service; no phone is selected through an implicit singleton or broadcast.
 
-This is a trusted-local-network development server, not an internet-facing deployment.
-The standard-library HTTP server has limited hardening ([Python documentation](https://docs.python.org/3/library/http.server.html)).
-There are no Linux/Windows binary packages or verified physical multi-iPhone results yet.
+## Automatic startup
 
-## Run from source
+`serve` detects a private LAN IPv4 address, creates/reuses an owner-private CA and HTTPS
+server certificate, starts the platform's HID peripheral, and prints owner setup instructions.
+The defaults are:
 
-From the repository root:
+| Listener | Purpose |
+| --- | --- |
+| `https://LAN_IP:27891` | Safari sharing and authenticated LAN web UI/API |
+| `http://127.0.0.1:27893` | Authenticated operator grid/API; no desktop CA trust needed |
+| `http://LAN_IP:27892/root-ca.cer` | Public CA certificate only; no control, screens or tokens |
 
-```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install ./server
-.venv/bin/open-iphone-use serve
-# Another terminal: retrieve the private operator credential, then paste it into the UI.
-.venv/bin/open-iphone-use token
-```
+Private operator links carry the login credential in the URL fragment, which is consumed
+and removed by the web page. The generic private sharing invitation enrolls each browser
+with its own ID/token. Safari localStorage retains that capture identity across visits;
+private browsing, cleared storage or a changed server origin can create a new slot. An
+inactive old slot's peer can be reassociated automatically; an active share's peer cannot
+be silently stolen. Named links remain available with `add` or the UI's new-phone form.
 
-Open `http://127.0.0.1:27891` in a browser. On Windows use `py -3 -m venv .venv` and
-`.venv\Scripts\open-iphone-use.exe`. The server starts with capture/viewing enabled and
-HID unavailable until a backend is configured. The default state is `~/.open-iphone-use`;
-use global `--state /short/private/path` or `OIU_STATE` to change it. Do not put state in Git.
-The virtual environment's CLI and the old DMG CLI share a name: use the explicit path.
-The Swift CLI also forwards `serve`, `devices`, `add`, `action`, `token`, `status --device`
-and `mcp --portable` to Python; set `OIU_SERVER_PYTHON` to the installed environment's Python.
+Before trusting the CA on an iPhone, compare its SHA-256 fingerprint with the server's
+terminal output, or transfer it over an already trusted channel. Install the profile and
+enable trust explicitly in iPhone settings. The bootstrap HTTP endpoint transports only
+public certificate bytes; it cannot establish authenticity by itself. Private keys are never
+served. The localhost UI avoids a host-browser trust step; LAN operator browsers must trust
+the CA too. IP changes renew the leaf certificate while preserving the trusted CA. CA
+expiry/mismatched key material is reported rather than silently replacing the trust anchor.
 
-For iPhones on the LAN, supply a PEM certificate/key for the host/IP and bind to its
-LAN address. The owner must install/trust the issuing CA on each phone, using a trusted
-channel, and keep the private key on the server:
-
-```sh
-.venv/bin/open-iphone-use serve --host 192.168.1.20 --cert /private/server.pem --key /private/server.key
-.venv/bin/open-iphone-use --url https://192.168.1.20:27891 devices
-```
-
-Certificates are provided through `ssl.SSLContext`; no platform-specific certificate
-creation/trust mutation is performed. LAN plaintext listeners are refused. Python CLI
-clients use normal system/OpenSSL trust; for a private CA set `SSL_CERT_FILE` to its
-public PEM. There is deliberately no insecure TLS bypass. Do not use `0.0.0.0` in links;
-select the host's reachable LAN address. Localhost HTTP is for local development only;
-a physical iPhone needs trusted HTTPS and an owner-approved Safari sharing session.
-
-In the UI, create a separate named sharing link for each iPhone. Send each link privately
-to its intended phone and approve sharing there. On the first upload its tile appears
-automatically, with live/paused state, frame age, preview and controls. Multiple screens
-are polled side by side; only the newest JPEG per phone is stored in memory. A link is a
-bearer credential: opening the *same* link on two phones writes to the same device slot.
-There is no untrusted automatic hardware identity detection from a browser. Separate links
-are the explicit enrollment boundary. Registry entries persist; screens do not survive restart.
+Override addresses/ports only when needed:
 
 ```sh
-open-iphone-use devices
-open-iphone-use add "Test iPhone"  # Prints this phone's private capture URL
-open-iphone-use status --device DEVICE_ID
-open-iphone-use action --device DEVICE_ID send_key \
-  --arguments '{"expectedFrameID":"FRESH_FRAME_ID","key":"cmd+h"}'
-open-iphone-use action --device DEVICE_ID stop_control
+open-iphone-use serve --host 192.168.1.20 --port 27891 --ui-port 27893 --certificate-port 27892
+open-iphone-use serve --cert /private/server.pem --key /private/server.key
+open-iphone-use serve --no-print-secrets      # log/service use; retrieve login with token
+open-iphone-use --state /private/phone-state devices
 ```
 
-Use `--url` before the subcommand for a nondefault server. `devices` includes enrolled
-phones with paused/not-yet-sharing status, so an absent live tile can still be diagnosed.
-Every input command, including preparation, requires a current capture frame ID from that
-same device. Release input bypasses the queue and requires no frame. Browser buttons and
-MCP supply IDs; CLI callers can read `/api/devices/ID/snapshot` with operator authorization.
-Unsupported HID returns an explicit failure while viewing remains available.
+`OIU_STATE` selects a custom state directory. `--url` overrides CLI discovery; by default
+CLI/MCP read private `connection.json` and connect to the loopback API. Explicit custom
+HTTPS endpoints use normal trust (`SSL_CERT_FILE` can supply a private CA); no TLS bypass
+is provided. `--no-certificate-server` disables public certificate download. For local
+software development only, `serve --local-http --capture-only` explicitly disables TLS
+and HID; this is a diagnostic mode, not an automatically selected fallback.
 
-## macOS HID without the app
+## Pair and prepare
 
-```sh
-swift build --package-path macos -c release
-```
+Enable AssistiveTouch and pair each phone to the host's advertised HID device through
+owner-controlled settings. Keep the phone unlocked. Open the same private HTTPS invitation
+in Safari on each phone, approve sharing, and keep Safari visible for initial preparation.
+Tiles appear automatically on first upload; `devices` lists live, paused and enrolled slots.
 
-Create devices first, then stop the server and create a private JSON backend config:
+Prepare/`ensure_session` associates the screen with an available Bluetooth peer. For one
+new peer and one new capture the association is one-to-one. With several new peers it
+opens the calibration boards and correlates targeted pointer movement with authenticated
+Safari hover feedback or visible pointer changes in the corresponding captures. All new
+candidate captures must show their boards. Ambiguity fails with actionable instructions;
+it never chooses an arbitrary peer or sends a blind click. Re-pairing can be reassociated
+without editing internal IDs. Pairing new phones one at a time is a recovery path when
+hover feedback or a recognizable grey pointer is unavailable.
 
-```json
-{
-  "DEVICE_ID": {
-    "kind": "macos",
-    "executable": "/absolute/repo/macos/.build/release/open-iphone-use-headless"
-  }
-}
-```
+The common control engine measures two board clicks using the same fast16-sized motion
+pattern as the legacy Mac workflow. It requires the green border, a visible white board,
+a single grey pointer, fresh screenshots and matching tap feedback before saving the
+mapping. Coordinates are converted from Safari viewport fractions to captured-screen
+fractions using the measured border. Calibration is stored per device/peer, motion version
+and aspect ratio. It is a two-point estimate, not a guarantee at every pixel. Screen
+rotation, changed pointer settings or suspect accuracy require preparation again.
 
-Restart with `serve --backend-config /private/backends.json`. Each device gets a separate
-helper, same-user Unix socket, frame store, calibration namespace and action controller.
-The advertised name is `OIU ` plus the first eight characters of the device ID. Pair the
-intended phone through owner-controlled Bluetooth settings and enable AssistiveTouch.
-`status --device ID` exposes the observed `backend.status.centralIdentifier`. Confirm the
-phone and add `"central": "OBSERVED_UUID"` to that device's config, then restart. Without
-this explicit binding, the helper can receive frames and report pairing state but refuses
-input. Duplicate central bindings are rejected. Subscriptions from a different central
-cannot receive HID reports after binding. Use Prepare with Safari visible; the original
-two-click calibration and board feedback work through the headless frame/tap channel.
+The grid offers tap, Home, typing, scroll and release input. On each action the server
+checks a frame ID from that device within five seconds, serializes input, releases on
+failure/cancellation, waits for a new frame and returns an image to MCP. Stop bypasses
+queued work. Capture expiry releases held keys/buttons. Owner unlocking, certificate trust,
+pairing, iOS sharing and protected-screen restrictions are preserved.
 
-The existing CoreBluetooth backend remains one central per helper. Several helper sessions
-can be configured, but simultaneous advertising/pairing/routing through one physical Mac
-radio has **not been demonstrated**. OS radio limits may prevent it. Multi-device core and
-capture support are implemented; reliable many-phone physical control is a remaining
-hardware-validation milestone, not a proven feature. Do not run legacy standalone mode
-and headless helpers against the same paired phone.
+## macOS implementation
 
-The native app is an optional client: launch its executable with
-`OIU_SERVER_URL=https://HOST:27891` (or localhost HTTP). It shows the same grid in WKWebView
-and starts no local controller, radio, socket or receiver. Trust must already be configured;
-the client does not override certificate errors. With no environment variable the app
-keeps its original single-phone standalone behavior. Existing app/DMG scripts are preserved;
-they do not bundle/install Python or the new helper yet.
+The native Swift helper runs with `--radio` and owns one CoreBluetooth peripheral manager,
+one HID service and independent subscriptions/generations per central. Every update names
+one concrete central. Per-peer release cancels its backpressured sends without releasing
+other phones. The helper has embedded Bluetooth purpose strings and exits/releases input
+when its parent server exits. Python supplies capture/calibration and the web UI; no
+SwiftUI lifecycle or app bundle is needed. Existing standalone app/controller/MCP behavior
+is preserved separately.
 
-## MCP
+Setup builds and places the helper next to the runtime. A source environment can set
+`OIU_MAC_HELPER` or use `serve --helper PATH`; source checkouts are also discovered and can
+build it when missing. These are overrides, not normal setup requirements. Approve the
+Bluetooth privacy prompt, enable the radio, and close the legacy standalone app to avoid
+competing services. Initialization/permission/backpressure failures are reported. A restricted
+agent sandbox can prevent Bluetooth XPC even when compilation and the web server work;
+run the owner CLI normally when that diagnostic appears.
 
-Register the portable environment's executable with `args: ["mcp"]`. For a custom state
-or server, global arguments precede `mcp`:
+## Linux implementation — implemented, not yet hardware-verified
 
-```json
-{
-  "mcpServers": {
-    "open-iphone-use": {
-      "command": "/absolute/repo/.venv/bin/open-iphone-use",
-      "args": ["--url", "https://HOST:27891", "mcp"]
-    }
-  }
-}
-```
+The real BlueZ service uses `dbus-fast` on the system bus. It registers an ObjectManager
+with HID service, encrypted report map/information/protocol/control characteristics,
+keyboard/mouse report values, report-reference descriptors and a connectable LE advertisement.
+Every capable/powered adapter is registered. The terminal pairing agent implements PIN,
+passkey and numeric-comparison flows and requires owner input; no auto-approval or automatic
+trust is used. If default-agent access is denied, authorize through the system Bluetooth UI.
 
-MCP is stdio JSON-RPC forwarding to the running server, not a publicly exposed MCP listener.
-It supports initialization, ping, tools discovery/calls and image content. Every device
-operation requires `device_id`; `list_devices` returns explicit IDs. Input tools also require
-`expected_frame_id`. The original Swift MCP helper remains for standalone-app compatibility.
-The portable tool surface covers preparation, relative/absolute pointer, clicks, keyboard,
-scroll, swipe/feed and stop. Advanced legacy diagnostic/retry aliases are not exposed yet.
-After input, inspect a fresh screenshot; neither transmission nor changing pixels certify success.
+Per-peer `AcquireNotify` channels use SOCK_SEQPACKET and SCM_RIGHTS FD passing. If the
+installed BlueZ uses shared `StartNotify`/Value notifications instead, the code permits a
+send only when a single paired HID central is connected on that adapter and no conflicting
+acquired channels exist. Ambiguous shared notifications are refused. On those versions,
+use one phone per BLE-capable adapter for simultaneous control. Unrelated connected
+headsets/peripherals are excluded from HID peer candidates by tracking HID attribute reads.
+Radio/driver connection and advertisement limits still apply. This path needs verification
+on actual BlueZ/iPhone hardware; software tests do not prove stack-level FD invocation.
 
-## Adapter boundaries and platform status
+Install/start `bluez` and `dbus`, enable the adapter, and run as a user authorized to call
+`org.bluez` (desktop Bluetooth/polkit policy). Setup handles common package managers;
+permission/policy failures include commands/settings to inspect. Do not run the whole web
+server as root to work around a missing policy. Relevant upstream interfaces:
+[BlueZ GATT](https://github.com/bluez/bluez/blob/master/doc/org.bluez.GattCharacteristic.rst),
+[GATT registration](https://github.com/bluez/bluez/blob/master/doc/org.bluez.GattManager.rst).
 
-| Piece | macOS | Linux | Windows |
-| --- | --- | --- | --- |
-| Registry, queues, CLI, web, HTTP/TLS, stdio MCP | Implemented/tested here | Portable implementation; host testing pending | Portable implementation; host testing pending |
-| Capture | Existing Safari page reused; synthetic uploads tested | Same HTTP transport; Safari on iPhone still required | Same HTTP transport; Safari on iPhone still required |
-| HID | Native CoreBluetooth helper builds; physical headless behavior untested | `BlueZBackend` explicit unavailable stub | `WindowsBackend` explicit unavailable stub |
-| Certificates | Explicit PEM + owner trust; original app CA preserved | PEM adapter; provisioning planned | PEM adapter; provisioning planned |
+## Windows implementation — implemented, not yet hardware-verified
 
-`HIDBackend.request/ingest/stop_capture/close` is the device-scoped boundary; capture transport is in `http.py`,
-state/actions in `core.py`, TLS in `tls_context`. Backend configuration is local-only and
-cannot be changed through the web API. A native adapter receives logical commands, frame
-updates and tap feedback, and must serialize input, bind its central, stop on stale capture,
-release on stop/cancellation/disconnect, and return real failures. It must not silently
-broadcast commands to all subscribers.
+The real WinRT service uses native PyWinRT v4 projections in an owned MTA event loop.
+It probes `BluetoothAdapter.IsPeripheralRoleSupported`, creates the HID service, encrypted
+read/write/report characteristics, report-reference descriptors, deferred read/write
+handlers and connectable advertising. It tracks client sessions and uses only the targeted
+`NotifyValueAsync(buffer, subscribedClient)` overload, checking notification size and result
+status. Shutdown removes event handlers and stops advertising. The same common calibration
+and per-phone control engine is used on Windows.
 
-Linux plan: implement a D-Bus service using BlueZ `GattManager1.RegisterApplication` and
-`LEAdvertisingManager1.RegisterAdvertisement`, encrypted keyboard/mouse report attributes,
-report-reference descriptors and per-central subscription/notification routing; integrate
-BlueZ owner pairing/authorization agents and adapter selection. Verify hardware peripheral
-support and simultaneous centrals before promising support. Relevant upstream interfaces:
-[BlueZ GATT API](https://github.com/bluez/bluez/blob/master/doc/org.bluez.GattManager.rst),
-[advertising API](https://github.com/bluez/bluez/blob/master/doc/org.bluez.LEAdvertisingManager.rst).
-Do not substitute a BLE *central* library for an HID peripheral implementation.
+Requires Windows 10 1703+ or Windows 11 with a compatible driver; OS Bluetooth privacy,
+enterprise policy, GATT service restrictions and firewall rules can prevent operation.
+Errors include the failed operation/status and setup guidance; unsupported hardware is
+reported as failure, never simulated success. Packaged deployments must declare Bluetooth
+capability; the installer supplies a desktop CLI, not a signed MSIX. Actual driver/privacy/
+GATT behavior still needs Windows hardware validation. Microsoft's
+[GATT server guide](https://learn.microsoft.com/en-us/windows/apps/develop/devices-sensors/gatt-server)
+and [targeted notification API](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattlocalcharacteristic.notifyvalueasync)
+document the underlying interfaces, not verified iPhone compatibility.
 
-Windows plan: a C#/WinRT sidecar using `GattServiceProvider`, encrypted report characteristics,
-notifications and device binding. First probe `BluetoothAdapter.IsPeripheralRoleSupported`;
-check HID service restrictions, required Bluetooth capabilities, adapter/driver behavior,
-and background process lifecycle on actual Windows hardware. Microsoft's
-[GATT server sample](https://github.com/microsoft/Windows-universal-samples/tree/main/Samples/BluetoothLE)
-is feasibility evidence for GATT, not proof of iPhone HID support. Both adapters currently
-fail closed and can be selected with `kind: bluez` / `kind: windows` to diagnose availability.
+## MCP and limits
 
-## Security and limits
+Register the installed CLI with `args: ["mcp"]`. List devices, choose an explicit ID,
+read its screenshot, then prepare/act using its fresh frame ID. Stop requires only the
+ID. The portable MCP surface covers keyboard, pointer, calibration, scroll, swipe/feed
+and release. Advanced legacy diagnostic/retry aliases remain available only from the
+standalone Swift helper. No model or API key is embedded in this project.
 
-The state directory is owner-private and the JSON credential file is mode 0600 on POSIX;
-Windows ACL inheritance must be reviewed before deployment. A single-writer OS lock prevents
-two servers using the same directory. The operator token grants viewing/control of all phones;
-each capture token can only upload frames/taps and stop its own stream. There is no cross-origin
-API access. Credentials are not included in request logs, HTML, device lists or screenshots.
-The login token remains in browser sessionStorage; clear site data to remove saved access.
-Sharing links are sensitive and retained in Safari history. Credential rotation/revocation,
-audit logging, Windows ACL tooling and internet-grade authentication remain planned.
-
-Frames are bounded to 4 MiB, device enrollment to 64, pending actions to 16 per device and
-HTTP connections to 64 with read timeouts. Queues are isolated per device; release input
-invalidates queued work and bypasses an active operation. The watchdog releases input when
-capture expires after five seconds. Native actions preserve the original fresh-frame and
-post-action checks. Keep iPhones unlocked; no automatic pairing/trust/unlock is provided.
-Web polling/base64 snapshots favor portability over high-frame-rate efficiency. At many
-phones, bandwidth and per-upload native IPC need profiling; WebSocket/MJPEG transport and
-bounded native ingestion latency are future work.
-
-## Checks
-
-See [the source-preview validation record](web-server-validation.md) for tested and untested behavior.
-
-```sh
-PYTHONPATH=server python3 -m unittest discover -s server/tests -v
-swift test --package-path macos
-swift build --package-path macos -c release
-node macos/scripts/test-capture-page.mjs
-python3 macos/scripts/test-agent-mcp.py macos/.build/release/open-iphone-use-mcp
-```
-
-In restricted environments SwiftPM may need `--disable-sandbox --cache-path /tmp/oiu-swift-cache`;
-this does not disable the outer workspace sandbox. No `ios/` tree exists in this checkout,
-so the older CONTRIBUTING iOS commands cannot be run here. Tests/builds, synthetic transport,
-UI inspection and actual iPhone control must be reported separately.
+Each device stores its own capture credential, frame history, peer mapping/calibration,
+action serialization and cancellation generation. State is owner-private (POSIX modes /
+Windows NTFS ACLs), and an OS lease prevents two servers sharing the same state directory.
+Frames are memory-only. Limits: 64 enrolled slots, 4 MiB per JPEG, 16 accepted actions per
+device and 64 main HTTP connections. The server is for a trusted LAN/localhost. Token
+rotation/revocation, high-density streaming optimization and internet-grade deployment
+are separate future work. [Installation](installation.md), [validation](web-server-validation.md).

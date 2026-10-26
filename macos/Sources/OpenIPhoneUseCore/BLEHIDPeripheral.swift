@@ -370,7 +370,7 @@ public final class BLEHIDPeripheral: NSObject {
         onChange?()
     }
 
-    private static let reportDescriptor = Data([
+    public static let reportDescriptor = Data([
         0x05, 0x01,       // Usage Page (Generic Desktop)
         0x09, 0x06,       // Usage (Keyboard)
         0xA1, 0x01,       // Collection (Application)

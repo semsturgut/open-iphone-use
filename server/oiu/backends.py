@@ -16,13 +16,13 @@ class HIDBackend(Protocol):
     def close(self) -> None: ...
 
 
-class UnavailableBackend:
-    def __init__(self, platform="none"):
+class CaptureOnlyBackend:
+    def __init__(self, platform="capture-only"):
         self.platform = platform
         self.label = "Control unavailable"
 
     def request(self, operation, **arguments):
-        return {"ok": False, "message": f"{self.platform} HID unavailable; capture/viewing works. See docs/headless-server.md."}
+        return {"ok": False, "message": "Capture-only diagnostic mode. Restart without --capture-only for native HID."}
 
     def ingest(self, jpeg):
         return {}
@@ -34,18 +34,6 @@ class UnavailableBackend:
         pass
 
 
-class BlueZBackend(UnavailableBackend):
-    """Adapter boundary for org.bluez.GattManager1/LEAdvertisingManager1; not implemented."""
-    def __init__(self):
-        super().__init__("BlueZ (planned)")
-
-
-class WindowsBackend(UnavailableBackend):
-    """Adapter boundary for WinRT GattServiceProvider; not implemented."""
-    def __init__(self):
-        super().__init__("Windows GATT (planned)")
-
-
 class MacBackend:
     """One isolated native process, pairing binding and calibration namespace per device.
 
@@ -54,7 +42,7 @@ class MacBackend:
     """
     label = "macOS HID configured"
 
-    def __init__(self, executable, directory, device_id, central=None):
+    def __init__(self, executable, directory, device_id, central=None, radio=False):
         self.directory = Path(directory)
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.path = str(self.directory / "bridge.sock")
@@ -65,7 +53,7 @@ class MacBackend:
         env.pop("OIU_EXPECTED_CENTRAL", None)
         if central:
             env["OIU_EXPECTED_CENTRAL"] = central
-        self.process = subprocess.Popen([executable], env=env, stdin=subprocess.DEVNULL,
+        self.process = subprocess.Popen([executable] + (["--radio"] if radio else []), env=env, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL)
         for _ in range(100):
             if self.process.poll() is not None:
@@ -114,3 +102,53 @@ class MacBackend:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
+
+
+class MacRadio:
+    """One native shared CoreBluetooth peripheral, with an explicit central on every report."""
+    def __init__(self, executable, directory):
+        self.bridge = MacBackend(executable, directory, 'shared-radio', radio=True)
+        deadline=time.monotonic()+4
+        self.startup=self.invoke('radio_status')
+        while self.startup['state'] in ('starting','publishing') and time.monotonic()<deadline:
+            time.sleep(.05)
+            self.startup=self.invoke('radio_status')
+
+    def invoke(self, operation, **arguments):
+        response = self.bridge.request(operation, **arguments)
+        if not response.get('ok'): raise OSError(response.get('message', 'Native radio request failed'))
+        return json.loads(response['message'])
+
+    def peers(self):
+        status = self.invoke('radio_status')
+        self.startup = status
+        if status['state'] in ('bluetoothPermissionDenied', 'peripheralUnsupported', 'bluetoothOff', 'servicePublishFailed', 'advertisingFailed', 'bluetoothInitializationTimedOut', 'waitingForBluetoothPermission'):
+            raise OSError(status.get('error') or status['state'])
+        return status['peers']
+
+    def send(self, peer, report, payload):
+        self.invoke('radio_send', key=peer, dx=report, text=base64.b64encode(payload).decode())
+
+    def release(self, peer):
+        try: self.invoke('radio_release', key=peer)
+        except (OSError, ValueError): pass
+
+    def close(self):
+        try:
+            for peer in self.invoke('radio_status')['peers']: self.release(peer['id'])
+        except (OSError,ValueError): pass
+        finally: self.bridge.close()
+
+
+def create_radio(state, helper=None):
+    import sys
+    if sys.platform == 'darwin':
+        from .bootstrap import mac_helper
+        return MacRadio(helper or mac_helper(), Path(state)/'radio')
+    if sys.platform == 'linux':
+        from .platforms.bluez import BlueZRadio
+        return BlueZRadio()
+    if sys.platform == 'win32':
+        from .platforms.windows import WindowsRadio
+        return WindowsRadio()
+    raise OSError(f'Unsupported host platform: {sys.platform}')

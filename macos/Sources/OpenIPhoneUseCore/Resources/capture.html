@@ -62,16 +62,16 @@
 <main>
   <section class="landing" id="landing">
     <h1>Open iPhone Use</h1>
-    <p>Share this iPhone's screen with your Mac so the agent can see it and act on it.</p>
+    <p>Share this iPhone's screen with this server so the agent can see it and act on it.</p>
     <button id="start">Start sharing</button>
-    <p class="fine">The screen stays visible to your Mac while you share. Stop it from the iOS
+    <p class="fine">The screen stays visible to this server while you share. Stop it from the iOS
       broadcast indicator when you are done. Nothing is recorded, and the microphone stays off,
       so videos keep autoplaying in other apps.</p>
   </section>
 
   <section class="live" id="live">
     <div class="line"><span class="dot" id="dot"></span><span id="headline">Sharing</span></div>
-    <p class="fine" id="hint">Ready. The Mac checks calibration when sharing starts.</p>
+    <p class="fine" id="hint">Ready. Start a task or use Calibrate pointer to prepare control.</p>
     <div class="row">
       <button class="secondary" id="stop">Stop sharing</button>
       <button class="secondary" id="calibrate">Calibrate pointer</button>
@@ -115,6 +115,7 @@
 <script>
 (() => {
   const token = new URLSearchParams(location.search).get('token') || '';
+  let pairEpoch = '', lastHover = 0;
   const startButton = document.querySelector('#start');
   const stopButton = document.querySelector('#stop');
   const calibrateButton = document.querySelector('#calibrate');
@@ -228,6 +229,14 @@
     finally { if (run === generation) calibrateButton.disabled = false; }
   }
 
+  document.querySelector('#board').addEventListener('pointermove', (event) => {
+    if (event.pointerType !== 'mouse') return;
+    if (!pairEpoch || Date.now() - lastHover < 100) return;
+    lastHover = Date.now();
+    fetch('/api/pointer', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Open-iPhone-Use-Token': token},
+      body: JSON.stringify({epoch: pairEpoch})}).catch(() => {});
+  });
+
   function reportTap(event) {
     const x = event.clientX / window.innerWidth;
     const y = event.clientY / window.innerHeight;
@@ -328,11 +337,12 @@
         },
         body: blob
       });
-      if (!response.ok) throw new Error('Mac receiver returned ' + response.status);
+      if (!response.ok) throw new Error('Screen receiver returned ' + response.status);
       let result = {};
       try { result = await response.json(); } catch {}
       if (run !== generation || controller.signal.aborted) return;
       frameCount += 1;
+      pairEpoch = result.pairEpoch || '';
       if (!calibrationRequested) {
         calibrationRequested = true;
         void requestCalibration(false);

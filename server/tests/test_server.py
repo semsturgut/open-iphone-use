@@ -176,7 +176,7 @@ class ServerTests(unittest.TestCase):
     def test_cli_serve_shutdown_and_lease_release(self):
         state = str(Path(self.tmp.name)/'cli-state')
         process = subprocess.Popen([sys.executable, '-m', 'oiu.cli', '--state', state,
-                                    'serve', '--port', '0'], stdout=subprocess.PIPE,
+                                    'serve', '--local-http', '--capture-only', '--port', '0'], stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True)
         try:
             line = process.stdout.readline().strip()
@@ -197,6 +197,19 @@ class ServerTests(unittest.TestCase):
                 process.wait()
             process.stdout.close()
             process.stderr.close()
+
+    def test_shared_invitation_enrolls_independent_capture_credentials(self):
+        def enroll(invite):
+            return self.api('/api/enroll', b'{}', extra={'X-Open-iPhone-Use-Invite':invite})
+        with self.assertRaises(HTTPError): enroll('invalid')
+        first,second=enroll(self.registry.invite_token),enroll(self.registry.invite_token)
+        self.assertNotEqual(first['capture_path'],second['capture_path'])
+        for item in (first,second):
+            self.api('/api/frame',JPEG,item['capture_path'].split('token=')[1],True)
+        devices=self.api('/api/devices')
+        self.assertEqual(len(devices),4)
+        self.assertEqual(sum(d['capture_active'] for d in devices),2)
+        self.assertEqual(len({d['name'] for d in devices}),4)
 
     def test_single_writer_state_lease(self):
         from oiu.state import StateLease

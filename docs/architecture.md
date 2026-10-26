@@ -1,55 +1,72 @@
 # Architecture
 
-The portable headless server in `server/oiu` owns web capture and multi-device sessions.
-The existing macOS app is optional: it can display that server's web UI, or continue using
-its original standalone controller. The old Swift stdio MCP helper remains compatible
-with standalone mode; the portable CLI supplies multi-device MCP.
+The headless Python service owns HTTP/TLS, enrollment, screen stores, pairing association,
+calibration, per-device input queues, web controls, CLI and MCP. Swift remains the macOS
+native radio and the optional native app. Linux and Windows use real OS peripheral APIs.
 
 ```mermaid
 flowchart LR
-    I[Owner-approved iPhone shares] -->|HTTPS / per-device tokens| S[Python headless server]
-    B[LAN browser grid / optional Mac client] -->|Operator credential| S
-    A[Agent MCP client] --> M[Portable stdio MCP CLI]
-    M -->|Authenticated local HTTP or TLS| S
-    S --> D[Device registry / frame stores / action queues]
-    D -->|Device-scoped adapter| H[Swift macOS headless HID helper]
-    H -->|Bound central only| I
-    D --> P[BlueZ / Windows unavailable adapters]
+    I[Many owner-approved iPhone shares] -->|Per-device HTTPS credentials| P[Python service]
+    U[Localhost / LAN operator grid] -->|Operator token| P
+    A[MCP client] --> C[Portable stdio CLI]
+    C --> P
+    P --> D[Device registry / frames / queues / calibration]
+    D --> R[One shared host radio]
+    R --> M[CoreBluetooth Swift helper]
+    R --> L[BlueZ D-Bus peripheral]
+    R --> W[WinRT GATT peripheral]
+    M -->|Explicit central| I
+    L -->|Per-peer FD / guarded adapter| I
+    W -->|Explicit subscribed client| I
 ```
 
-Python 3.11+ provides a portable dependency-free server runtime. Native frameworks are
-kept in platform adapters instead of leaking into session/HTTP/MCP code. Swift preserves
-the tested macOS report encoder, CoreBluetooth implementation, pointer calibration and
-inspect/action/inspect workflow. No model is embedded in either runtime.
+Python 3.11+ keeps session/action logic portable; Pillow provides the measured calibration
+board/pointer gate, cryptography manages a private CA/renewed leaf certificates, and tomlkit
+preserves Codex configuration during installer registration. Platform-specific imports are
+lazy. macOS uses a native Swift helper over a same-user Unix socket, Linux uses dbus-fast,
+and Windows uses native PyWinRT projections in an owned MTA asyncio loop.
 
-Each enrolled device owns a persistent ID and capture token, an in-memory latest JPEG
-and recent frame-ID history, a cancellation generation, a bounded action queue and a HID
-adapter. Capture/tap ingress remains concurrent with input so calibration can wait for
-fresh frames. The operator credential can inspect/control all devices; capture credentials
-cannot issue input. Native routes explicitly bind a Bluetooth central and namespace
-calibration. A headless helper owns no HTTPS receiver or SwiftUI application lifecycle.
-The Mac client's `OIU_SERVER_URL` mode starts no legacy controller.
+The `radio.peers/send/release/close` boundary sends report ID + bytes to a concrete native
+peer. It never encodes an implicit current phone. `Control` wraps a radio with one device's
+calibration, frame waits, pointer/keyboard state, stop generation and pairing binding.
+Capture uploads/tap/hover feedback stay concurrent with actions waiting for new images.
+The registry adds separate credentials, bounded action acceptance and stale/foreign frame
+checks. A global pairing lock only serializes association; already associated phones can
+act independently.
 
-The web grid polls authenticated atomic snapshots, creates tiles on first upload and
-passes the displayed frame ID with input. A stale/foreign frame blocks input. Stop bypasses
-queued actions, invalidates their generation and releases keys/buttons. Capture expiry
-also releases input. Frames are kept in memory only; credentials are stored privately.
+One generic invitation enrolls independent browser identities. Persistent bindings are
+reused on reconnect; inactive captures can release ownership for automatic reassociation.
+Multiple unbound peers are correlated by targeted pointer movement on visible boards.
+Only an authenticated matching capture supplies the corresponding feedback. Ambiguity
+fails closed. Calibration clicks require both a measured board and visible pointer; normal
+absolute input uses the resulting device/peer/version/aspect-bound estimate. No visual
+feedback is inferred from HID acceptance alone.
 
-Actual multi-phone radio support is not established by multiple software sessions. The
-macOS peripheral remains single-central per helper, and simultaneous helpers on one radio
-need physical verification. Linux and Windows HID currently return unavailable. See
-[setup, API behavior, adapter contracts and implementation plans](headless-server.md).
+TLS capture and the operator grid are separate listener roles: LAN HTTPS serves capture
+and authenticated APIs, a loopback HTTP listener avoids desktop certificate installation,
+and an HTTP bootstrap endpoint serves only public CA bytes. The private operator token
+and invitation/capture tokens have distinct permissions. CLI/MCP discover the loopback
+connection from private state rather than requiring manual URL/CA configuration.
 
-## Standalone Mac compatibility
+## Native service details
 
-With no server URL, the app still owns its original single-phone receiver and controller:
-private Wi-Fi HTTPS on port 27890, local CA and installation token, latest-frame store,
-CoreBluetooth peripheral, serialized actions and same-user Unix broker. The bundled Swift
-MCP helper forwards to that broker. Existing build/DMG scripts retain their paths and
-resources. The portable server uses port 27891 and a separate state directory by default.
-It does not migrate legacy capture links, credentials or pairings automatically.
+- macOS: one CoreBluetooth manager and HID service; independent central subscriptions,
+  report backpressure/cancellation and targeted release. The old single-phone Swift
+  controller remains intact for standalone-app compatibility and legacy checks.
+- Linux: exported ObjectManager/service/characteristic/descriptor tree, encrypted HOGP,
+  connectable advertising, owner-confirmed pairing, and per-peer acquired notification
+  sockets. Shared-notify fallbacks refuse ambiguity and require one central per adapter.
+- Windows: peripheral capability checks, encrypted GATT service/attributes, deferred
+  read/write handlers, native event cleanup and explicit subscriber notification results.
 
-The original two-click mapping remains device/profile/version/aspect-bound, and can
-require recalibration after pointer setting changes. Only the owner can approve capture,
-trust, pairing or unlocking. Input delivery does not prove a UI outcome. See
-[security](../SECURITY.md), [feed control](feed-control.md) and [device evidence](device-matrix.md).
+All three implementations exist. Linux/Windows and the new physical multi-phone control
+path are not yet hardware-verified. Radio/OS limits are operational constraints, not
+features that software can promise away. [Platform setup](headless-server.md).
+
+## Optional Mac app and compatibility
+
+`OIU_SERVER_URL=http://127.0.0.1:27893` makes the SwiftUI app display the same grid through
+WKWebView, starting no local controller/radio/receiver. Without the variable it preserves
+the original single-phone app, HTTPS receiver/local CA, Unix broker and Swift MCP helper.
+Its build/DMG scripts retain their paths and resources. The new setup scripts build the
+CLI-native helper separately and do not create or modify distribution artifacts.

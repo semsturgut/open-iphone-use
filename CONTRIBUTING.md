@@ -6,10 +6,15 @@ claiming device behavior. Read [security](SECURITY.md) before changing capture o
 
 ## Portable server checks
 
+Install development dependencies with `python3 -m venv .venv` and `.venv/bin/python -m pip install ./server`.
+For BlueZ interface/channel tests on macOS, also install `dbus-fast>=5.2,<6` in that test environment; it does not access a Linux system bus merely by importing the interfaces.
+
 ```sh
-PYTHONPATH=server python3 -m unittest discover -s server/tests -v
+PYTHONPATH=server .venv/bin/python -m unittest discover -s server/tests -v
 node --check server/oiu/web/app.js
 ```
+
+Run `sh -n setup.sh` and `shellcheck setup.sh` when available. On Windows parse/test `setup.ps1` and validate GATT behavior on real hardware; AST/contract tests cannot prove WinRT permission or driver support. Installer checks must use temporary home/prefix directories, preserving real client configs.
 
 The packaged capture page mirrors the native source; its equality test must pass after
 any edit. To check two real native helper processes without Bluetooth advertising:

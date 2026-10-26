@@ -11,6 +11,14 @@ struct HeadlessBridge {
             fputs("Launch through the portable server; dedicated support directory required.\n", stderr)
             return
         }
+        if CommandLine.arguments.contains("--radio") {
+            let radio = HeadlessRadio()
+            try radio.start()
+            let parent = getppid()
+            while !Task.isCancelled && getppid() == parent { try await Task.sleep(for: .seconds(1)) }
+            await radio.stop()
+            return
+        }
         let controller = OpenIPhoneUseController(headless: true)
         // Keep CoreBluetooth and the serialized controller alive without a GUI app.
         let parent = getppid()

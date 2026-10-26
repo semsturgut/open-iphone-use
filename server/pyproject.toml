@@ -7,6 +7,14 @@ name = "open-iphone-use-server"
 version = "0.1.0"
 requires-python = ">=3.11"
 description = "Portable, local multi-iPhone capture and control server"
+dependencies = [
+    "cryptography>=44,<51", "Pillow>=11,<14", "tomlkit>=0.13,<1",
+    "dbus-fast>=5.2,<6; sys_platform == 'linux'",
+    "winrt-runtime>=4,<5; sys_platform == 'win32'",
+    "winrt-Windows.Devices.Bluetooth>=4!0,<5!0; sys_platform == 'win32'",
+    "winrt-Windows.Devices.Bluetooth.GenericAttributeProfile>=4!0,<5!0; sys_platform == 'win32'",
+    "winrt-Windows.Storage.Streams>=4!0,<5!0; sys_platform == 'win32'",
+]
 
 [project.scripts]
 open-iphone-use = "oiu.cli:main"
