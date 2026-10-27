@@ -44,7 +44,7 @@ def tools():
         if name in ('ensure_session', 'prepare_session'):
             result[-1]['description'] = 'Prepare the pointer: a compatible, non-suspect calibration is reused; otherwise the Safari sharing tab is brought to the front and calibrated. Calibration accepts a good fit immediately and remeasures once if poor. Optional return_app reopens that app via Spotlight after preparation. Errors tell exactly what the owner must do.'
         if name in ('pointer_tap', 'pointer_move'):
-            result[-1]['description'] += ' Uses bounded corrections and learns consistent landing offsets. Inspect click_sent, verified, landing, predicted_landing and observation_method: predicted and blind landings are unverified, and even an observed landing may miss. Check the returned screen for the UI outcome.'
+            result[-1]['description'] += ' Uses bounded corrections and learns consistent landing offsets. A tap is refused if the observed landing is over 3% from the target or a hidden corrected pointer is predicted over 1% away; a never-observed pointer requires trusted calibration. Inspect click_sent, verified, landing, predicted_landing and observation_method: predicted and blind landings are unverified, and even an observed landing may miss. Check the returned screen for the UI outcome.'
         if name == 'get_latest_screenshot':
             result[-1]['description'] = 'Read the selected phone screenshot and frame age. For input use an ID captured after this device’s last input completed, at most 120 seconds old. Screen sharing must still be active (latest frame within five seconds).'
         if name in ('get_latest_screenshot', *ACTIONS):

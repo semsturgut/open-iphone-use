@@ -112,7 +112,7 @@ def pointer(jpeg, board_required=True, expected=None, radius=.18, reference=None
     return candidates[0],rect
 
 
-def pointer_difference(jpeg, reference, expected, radius=.18):
+def pointer_difference(jpeg, reference, expected, radius=.18, exclude=None):
     """Find a localized newly visible grey disc; reject widespread screen changes."""
     pic, prior = image(jpeg), image(reference)
     if pic.size != prior.size: raise ValueError('Screen geometry changed while locating the pointer')
@@ -126,6 +126,7 @@ def pointer_difference(jpeg, reference, expected, radius=.18):
         if not (max(5,w//150)<=min(cw,ch) and max(cw,ch)<=w/10 and .75<=cw/ch<=1.33 and .5<=count/(cw*ch)<=.95): continue
         point=((x0+x1-1)/2/w,(y0+y1-1)/2/h)
         if math.dist(point,expected)>min(radius,.06): continue
+        if exclude is not None and math.hypot((point[0]-exclude[0])*w,(point[1]-exclude[1])*h) <= max(w*.03, 1.5*max(cw,ch)): continue
         pixels=pic.crop((x0,y0,x1,y1))
         changes=mask.crop((x0,y0,x1,y1))
         pixdata=pixels.get_flattened_data() if hasattr(pixels,'get_flattened_data') else pixels.getdata()

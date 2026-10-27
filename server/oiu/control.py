@@ -185,7 +185,7 @@ class Control:
             previous=rect
         raise ValueError('Calibration board did not become visible and stable within the calibration timeout. Keep Safari sharing in front, unlock the phone and use the green-bordered board; charging icons/status dots are not the board')
 
-    def wait_pointer(self, after, expected=None, plausible=None, board_required=True, timeout=4, tolerance=mapping.TOLERANCE, reference=None, aspect=None):
+    def wait_pointer(self, after, expected=None, plausible=None, board_required=True, timeout=4, tolerance=mapping.TOLERANCE, reference=None, aspect=None, exclude=None):
         deadline=time.monotonic()+timeout
         previous=None
         stable_since=None
@@ -193,7 +193,7 @@ class Control:
         self.observation_frames = 0
         self.last_observation_method = None
         wakes = 0
-        last_stamp = after
+        last_stamp = None
         while time.monotonic()<deadline:
             remaining=deadline-time.monotonic()
             try: stamp,jpeg=self.capture_after(after,max(.001,min(.75,remaining)))
@@ -209,6 +209,8 @@ class Control:
                     after=self.motion_at
                 continue
             after=stamp
+            frame_interval = stamp-last_stamp if last_stamp is not None else None
+            last_stamp=stamp
             self.observation_frames += 1
             if aspect is not None:
                 pic=vision.image(jpeg)
@@ -219,7 +221,7 @@ class Control:
             except ValueError as error:
                 try:
                     if board_required or reference is None or expected is None: raise error
-                    point,rect=vision.pointer_difference(jpeg,reference,expected)
+                    point,rect=vision.pointer_difference(jpeg,reference,expected,exclude=exclude)
                     method='difference'
                 except ValueError:
                     previous=None; reason=str(error)
@@ -228,14 +230,13 @@ class Control:
                         wakes += 1
                         if self.observation_wake_remaining is not None: self.observation_wake_remaining -= 1
                         after=self.motion_at
-                    last_stamp=stamp
                     continue
             if expected is not None and math.dist(point,expected) > tolerance:
                 previous=None; reason='Pointer has not reached the commanded position'; continue
             if plausible is not None and not plausible(point,rect,jpeg):
                 previous=None; reason='Pointer position is not plausible for the commanded calibration move'; continue
             recent=list(self.frame_intervals)[-5:]
-            slow=(recent and median(recent)>1/3) or stamp-last_stamp>1/3
+            slow=(recent and median(recent)>1/3) or (frame_interval is not None and frame_interval>1/3)
             if slow and not board_required:
                 self.last_observation_method=method
                 return point,rect,stamp
@@ -245,7 +246,6 @@ class Control:
                 self.last_observation_method=method
                 return point,rect,stamp
             previous=point
-            last_stamp=stamp
         message='Timed out waiting for one stable grey AssistiveTouch pointer in two fresh frames. '+reason
         self.save_debug(message,expected=expected,reference=reference)
         raise ObservationUnavailable(message)
@@ -563,7 +563,8 @@ class Control:
                 point=None
                 point,_,_=self.wait_pointer(self.motion_at,expected=(x,y),tolerance=.18,
                                             board_required=False,aspect=c['aspect'],
-                                            timeout=max(.001,deadline-time.monotonic()), reference=correction_reference)
+                                            timeout=max(.001,deadline-time.monotonic()), reference=correction_reference,
+                                            exclude=last_seen)
                 frames+=self.observation_frames
                 last_seen=point
                 method=self.last_observation_method if hasattr(self,'last_observation_method') else 'direct'
@@ -692,7 +693,12 @@ class Control:
                 point,verified=self.absolute(args['x'],args['y'])
                 target='(%s,%s)'%(args['x'],args['y'])
                 if operation=='pointer_tap':
-                    if self.observation['first_landing'] is None and not self.trusted_calibration(self.calibration):
+                    prediction=self.observation['predicted_landing']
+                    if point is not None and math.dist(point,(args['x'],args['y']))>SUSPECT_MISS:
+                        raise ValueError('Observed pointer landing is more than 3% from the target; no click was sent. '+self.verification_reason)
+                    if point is None and prediction is not None and math.dist(prediction,(args['x'],args['y']))>mapping.TOLERANCE:
+                        raise ValueError('Pointer vanished after correction and its predicted landing is more than 1% from the target; no click was sent. '+self.verification_reason)
+                    if point is None and prediction is None and (self.observation['first_landing'] is not None or not self.trusted_calibration(self.calibration)):
                         raise ValueError('Pointer landing is unverified and calibration is not safe for a blind tap. Keep sharing visible, use the standard pointer and run ensure_session to recalibrate; no click was sent. '+self.verification_reason)
                     self.observation['click_sent'] = None  # A failed transport may leave delivery uncertain.
                     self.click()

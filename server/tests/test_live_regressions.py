@@ -259,11 +259,14 @@ class MotionRegressions(unittest.TestCase):
                 with patch.object(engine,'wait_pointer',side_effect=seen),patch.object(engine,'wait_frame'),patch.object(engine,'capture_after',return_value=(time.monotonic(),engine.jpeg)),patch('oiu.control.time.sleep'),patch.object(engine,'calibrate') as calibrate:
                     result=engine.request(operation,x=.5,y=.5)
                     calibrate.assert_not_called()
-                self.assertTrue(result['ok'],result)
-                self.assertIn('calibration marked for automatic recalibration on next ensure_session',result['message'])
+                if engine.debug_thread: engine.debug_thread.join(5)
+                self.assertEqual(result['ok'],operation=='pointer_move',result)
+                if operation=='pointer_tap': self.assertFalse(result['click_sent'])
+                else: self.assertIn('calibration marked for automatic recalibration on next ensure_session',result['message'])
                 self.assertAlmostEqual(engine.first_landing_distance,.04)
                 self.assertTrue(json.loads(engine.path.read_text())['calibration']['suspect'])
-                self.assertEqual(engine.label,'Pointer ready')
+                if operation=='pointer_tap': self.assertIn('no click was sent',engine.label)
+                else: self.assertEqual(engine.label,'Pointer ready')
                 self.assertTrue(engine.calibration_compatible())
                 # A new process must also see the persisted suspect flag.
                 restored=Control(engine.pairing,engine.directory,peer=engine.peer)
@@ -336,8 +339,9 @@ class MotionRegressions(unittest.TestCase):
             engine=self.engine(directory)
             with patch.object(engine,'wait_pointer',return_value=((.3,.3),(0,0,1,1),1)),patch.object(engine,'wait_frame'),patch('oiu.control.time.sleep'):
                 result=engine.request('pointer_tap',x=.4,y=.4)
-            self.assertTrue(result['ok'],result)
-            self.assertTrue(result['click_sent'])
+            if engine.debug_thread: engine.debug_thread.join(5)
+            self.assertFalse(result['ok'],result)
+            self.assertFalse(result['click_sent'])
             self.assertFalse(result['verified'])
             self.assertEqual(result['final_landing'],(.3,.3))
 

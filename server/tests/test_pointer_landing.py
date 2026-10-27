@@ -77,13 +77,37 @@ class LandingTests(unittest.TestCase):
         self.assertAlmostEqual(result['predicted_landing'][1],.5)
         self.assertIsNone(result['final_landing'])
 
-    def test_never_observed_untrusted_refuses_but_observed_miss_clicks(self):
+    def test_never_observed_untrusted_and_large_observed_miss_refuse(self):
         self.engine.calibration['suspect']=True
         result=self.action([ObservationUnavailable('hidden')])
         self.assertFalse(result['ok']); self.assertFalse(result['click_sent'])
-        result=self.action([((.3,.3),(0,0,1,1),1)]*3)
-        self.assertTrue(result['ok']); self.assertTrue(result['click_sent']); self.assertFalse(result['verified'])
+        with patch.object(self.engine,'click') as click, patch.object(self.engine,'save_debug') as debug:
+            result=self.action([((.3,.3),(0,0,1,1),1)]*3)
+        self.assertFalse(result['ok']); self.assertFalse(result['click_sent']); self.assertFalse(result['verified'])
         self.assertEqual(result['landing'],'observed')
+        self.assertIn('more than 3%',result['message']); click.assert_not_called(); debug.assert_called()
+
+    def test_observed_small_miss_clicks_unverified(self):
+        result=self.action([((.52,.5),(0,0,1,1),1)]*3)
+        self.assertTrue(result['ok']); self.assertTrue(result['click_sent'])
+        self.assertFalse(result['verified']); self.assertEqual(result['landing'],'observed')
+
+    def test_outside_tolerance_prediction_refuses_even_if_calibration_trusted(self):
+        self.engine.calibration['width']=10
+        with patch.object(self.engine,'click') as click, patch.object(self.engine,'save_debug') as debug:
+            result=self.action([((.56,.5),(0,0,1,1),1),ObservationUnavailable('hidden')])
+        self.assertFalse(result['ok']); self.assertFalse(result['click_sent'])
+        self.assertEqual(result['landing'],'unknown'); self.assertAlmostEqual(result['predicted_landing'][0],.46)
+        self.assertIn('predicted landing is more than 1%',result['message'])
+        click.assert_not_called(); debug.assert_called()
+
+    def test_correction_passes_previous_observation_to_difference_fallback(self):
+        e=self.engine
+        with patch.object(e,'capture_after',return_value=(time.monotonic(),e.jpeg)), \
+             patch.object(e,'wait_pointer',side_effect=[((.52,.5),(0,0,1,1),1),((.5,.5),(0,0,1,1),2)]) as wait, \
+             patch.object(e,'wait_frame'),patch('oiu.control.time.sleep'):
+            self.assertTrue(e.request('pointer_tap',x=.5,y=.5)['ok'])
+        self.assertEqual(wait.call_args_list[1].kwargs['exclude'],(.52,.5))
 
     def test_slow_capture_accepts_one_post_motion_frame(self):
         e=self.engine; now=time.monotonic(); e.frame_intervals.extend([.5,.6,.5])
@@ -92,6 +116,20 @@ class LandingTests(unittest.TestCase):
             point,_,_=e.wait_pointer(now,expected=(.5,.5),board_required=False)
         self.assertEqual(point,(.5,.5)); self.assertEqual(pointer.call_count,1)
         self.assertEqual(e.last_observation_method,'direct')
+
+    def test_late_first_frame_is_not_a_slow_capture_interval(self):
+        e=self.engine; now=time.monotonic(); e.frame_intervals.extend([.03]*5)
+        with patch.object(e,'capture_after',side_effect=[(now+.6,e.jpeg),(now+.8,e.jpeg)]), \
+             patch('oiu.vision.pointer',return_value=((.5,.5),(0,0,1,1))) as pointer:
+            e.wait_pointer(now,expected=(.5,.5),board_required=False)
+        self.assertEqual(pointer.call_count,2)
+
+    def test_slow_consecutive_frames_allow_single_detection(self):
+        e=self.engine; now=time.monotonic(); e.frame_intervals.extend([.03]*5)
+        with patch.object(e,'capture_after',side_effect=[(now+.1,e.jpeg),(now+.5,e.jpeg)]), \
+             patch('oiu.vision.pointer',side_effect=[ValueError('hidden'),((.5,.5),(0,0,1,1))]) as pointer:
+            e.wait_pointer(now,expected=(.5,.5),board_required=False)
+        self.assertEqual(pointer.call_count,2)
 
     def test_difference_new_disc_and_widespread_change(self):
         base=Image.new('RGB',(600,1000),'white'); after=base.copy()
@@ -107,6 +145,21 @@ class LandingTests(unittest.TestCase):
         with patch.object(e,'capture_after',return_value=(now+.5,post)),patch('oiu.vision.pointer',side_effect=ValueError('hidden')):
             e.wait_pointer(now,expected=(.5,.5),board_required=False,reference=reference)
         self.assertEqual(e.last_observation_method,'difference')
+
+    def test_difference_excludes_vacated_pointer_and_finds_new_disc(self):
+        base=Image.new('RGB',(600,1000),(200,200,200))
+        old=base.copy(); new=base.copy()
+        ImageDraw.Draw(old).ellipse((260,490,280,510),fill=(100,100,100))
+        ImageDraw.Draw(new).ellipse((296,490,316,510),fill=(100,100,100))
+        reference,post=jpeg_image(old),jpeg_image(new)
+        with self.assertRaises(ValueError): vision.pointer_difference(post,reference,(.49,.5))
+        point,_=vision.pointer_difference(post,reference,(.49,.5),exclude=(.45,.5))
+        self.assertAlmostEqual(point[0],.51,places=2)
+        e=self.engine; e.frame_intervals.extend([.5]*3); now=time.monotonic()
+        with patch.object(e,'capture_after',return_value=(now+.5,post)), \
+             patch('oiu.vision.pointer',side_effect=ValueError('hidden')):
+            point,_,_=e.wait_pointer(now,expected=(.49,.5),tolerance=.06,board_required=False,reference=reference,exclude=(.45,.5))
+        self.assertAlmostEqual(point[0],.51,places=2)
 
     def test_wake_net_zero_and_bounded_to_three(self):
         e=self.engine; moves=[]
