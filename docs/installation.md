@@ -3,18 +3,37 @@
 The macOS app and DMG are deprecated and removed; use the CLI. Windows and Linux backends
 have not been tested on real hardware; reports and pull requests are welcome.
 
-## macOS / Linux
+## Quick start
+
+**Install**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash
-curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --version v0.0.3
-~/.local/bin/open-iphone-use serve
+```
+
+**Start**
+
+```sh
+open-iphone-use serve
+```
+
+It starts in the background and returns, printing a `Web UI:` link (a local `http://127.0.0.1:…` address). Open that link in your browser to use the web UI. Use `open-iphone-use stop` to stop the server.
+
+**Uninstall**
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --uninstall
 ```
 
-The one-liner works once `install.sh` is on `main`; the prebuilt helper requires a release
-with assets. The default is the latest published release, or `main` if none exists. A ref
-can be a release tag or branch. `--dry-run` prints the plan without writing files;
+Windows: see [Advanced installation](#advanced-installation).
+
+## Advanced installation
+
+### macOS / Linux
+
+The prebuilt helper requires a release with assets. The default is the latest published
+release, or `main` if none exists. Use `--version v0.0.3` to select a release tag or
+branch. `--dry-run` prints the plan without writing files;
 `--no-agents` skips registration. `OIU_REPO`, `OIU_ARCHIVE_URL` and `OIU_HELPER_URL`
 select a repository or full archive URLs; helper checksums are fetched from the helper URL
 with `.sha256` appended. `--verify-downloads` downloads and verifies into a temporary
@@ -57,7 +76,7 @@ uses the same installation and client entries. `OIU_SWIFT_DISABLE_SANDBOX=1` is 
 SwiftPM-only workaround for environments whose outer sandbox blocks nested sandboxing;
 it does not change OS Bluetooth permissions or the outer sandbox.
 
-## Windows
+### Windows
 
 ```powershell
 irm https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/setup.ps1 | iex

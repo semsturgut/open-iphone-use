@@ -308,32 +308,55 @@ class ControlTests(unittest.TestCase):
         self.radio.positions['phone-b'] = [0, 0]
         other = Control(self.pairing, Path(self.tmp.name)/'b', peer='phone-b')
         self.radio.engines['phone-b'] = other
-        entered, resume = threading.Event(), threading.Event()
-        original = self.radio.send
+        other.ingest(screen())
+        entered, resume, second_done = threading.Event(), threading.Event(), threading.Event()
+        original_send = self.radio.send
         def delayed(peer, report, payload):
-            if peer == 'phone-a' and not entered.is_set():
+            if peer == 'phone-a':
                 entered.set()
-                if not resume.wait(30): raise OSError('Test timed out')
-            original(peer, report, payload)
+                if not resume.wait(30): raise OSError('Test send timed out')
+            original_send(peer, report, payload)
         self.radio.send = delayed
-        result = []
-        first = threading.Thread(target=lambda: result.append(self.engine.request('ensure_session')))
-        first.start()
-        try:
-            self.assertTrue(entered.wait(3))
-            second = other.request('ensure_session')
-            self.assertTrue(second['ok'], second)
-            self.assertTrue(first.is_alive(), 'Phone B must complete while phone A is blocked')
-        finally:
-            resume.set(); first.join(120)
-        self.assertFalse(first.is_alive(), 'Phone A preparation did not finish')
-        self.assertTrue(result[0]['ok'], result)
+
+        # Exercise request -> ready -> association and the real per-device packet lock,
+        # without coupling this concurrency test to image-based calibration timing.
+        def calibrate(engine):
+            engine.packet(2, mouse())
+            engine.calibration = {'owner': engine.peer}
+        results = {}
+        def prepare(name, engine, done=None):
+            try: results[name] = engine.request('ensure_session')
+            finally:
+                if done: done.set()
+        first = threading.Thread(target=prepare, args=('a', self.engine))
+        second = threading.Thread(target=prepare, args=('b', other, second_done))
+        with patch.object(self.engine, 'calibrate', side_effect=lambda: calibrate(self.engine)), \
+             patch.object(other, 'calibrate', side_effect=lambda: calibrate(other)):
+            first.start()
+            try:
+                self.assertTrue(entered.wait(10), 'Phone A never reached its blocked send')
+                second.start()
+                self.assertTrue(second_done.wait(15), 'Phone B did not finish while phone A was blocked')
+                self.assertTrue(results['b']['ok'], results['b'])
+                self.assertNotIn('a', results, 'Phone A completed before its send was released')
+                self.assertEqual([call[0] for call in self.radio.calls], ['phone-b'])
+            finally:
+                resume.set()
+                first.join(20)
+                if second.ident is not None: second.join(20)
+            self.assertFalse(first.is_alive(), 'Phone A preparation did not finish')
+            self.assertFalse(second.is_alive(), 'Phone B preparation did not finish')
+            self.assertTrue(results['a']['ok'], results['a'])
+        self.assertEqual([call[0] for call in self.radio.calls], ['phone-b', 'phone-a'])
         self.assertEqual(self.engine.peer, 'phone-a')
         self.assertEqual(other.peer, 'phone-b')
         self.assertIsNot(self.engine.calibration, other.calibration)
         with self.assertRaises(ValueError): self.engine.bind('phone-b')
-        del self.radio.positions['phone-a']
-        self.assertFalse(self.engine.request('ensure_session')['ok'])
+        calls_before = list(self.radio.calls)
+        with patch.object(self.radio, 'peers', return_value=[dict(id='phone-b', reports=[1, 2])]):
+            self.assertFalse(self.engine.request('ensure_session')['ok'])
+        self.assertEqual(self.radio.calls[len(calls_before):],
+                         [('phone-a', 1, keyboard()), ('phone-a', 2, mouse())])
         self.assertEqual(self.engine.peer, 'phone-a')
 
     def test_remove_detaches_control_and_erases_only_its_calibration(self):

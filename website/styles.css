@@ -2,3 +2,4 @@
 
 /* The web UI screenshot is a landscape image, including on narrow screens. */
 .screen-frame{height:auto;display:block}.screen-frame img{display:block;width:100%;height:auto;max-width:none}.setup-intro code{color:#fff;overflow-wrap:anywhere}
+.command{margin:23px 0}.command h3{font-size:15px;letter-spacing:0}.command-box{display:flex;align-items:stretch;border:1px solid #52645a;border-radius:5px;background:#0f1913;min-width:0}.command-box pre{margin:0;padding:13px;overflow-x:auto;flex:1;min-width:0;font-size:12px;line-height:1.5}.command-box code{white-space:pre}.copy-command{flex:none;border:0;border-left:1px solid #52645a;background:transparent;color:#b8f1d1;padding:0 12px;font:600 12px var(--font-body);cursor:pointer}.copy-command:hover{background:#274135}.copy-command:focus-visible{outline:3px solid #36bd83;outline-offset:-3px}.command p{margin-top:10px;font-size:13px}.setup-intro a:not(.button){color:#a3efc4}

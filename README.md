@@ -10,36 +10,29 @@ compatibility test surface.
 
 ## Quick start
 
-On macOS or Linux, install the latest published release (or choose a ref):
+**Install**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash
-curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --version v0.0.3
+```
+
+**Start**
+
+```sh
 open-iphone-use serve
-# Uninstall the managed runtime and unchanged agent entries:
+```
+
+It starts in the background and returns, printing a `Web UI:` link (a local `http://127.0.0.1:…` address). Open that link in your browser to use the web UI. Use `open-iphone-use stop` to stop the server.
+
+**Uninstall**
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --uninstall
 ```
 
-These commands become available when `install.sh` reaches `main`; the prebuilt helper
-requires a release with assets. The macOS helper is ad-hoc signed, not notarized. When no
-prebuilt helper is available, setup builds it with Swift 6 and Xcode Command Line Tools.
-macOS may ask for Bluetooth permission for the terminal or app launching the server.
-Linux hardware support is untested.
+Windows: see [Advanced installation](docs/installation.md#advanced-installation).
 
-On Windows, use PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/setup.ps1 | iex
-open-iphone-use serve
-```
-
-For development, clone the repository and run `sh setup.sh` (Windows: `.\setup.ps1`)
-from the checkout. Setup installs a managed runtime and the `open-iphone-use` CLI. It
-registers MCP for detected Codex, Claude Code, Cursor, OpenCode and Command Code clients,
-and installs the agent skill at `~/.agents/skills/open-iphone-use`; detected Claude Code
-and Command Code clients get aliases. Restart clients after setup. Run
-`open-iphone-use register-agents` for clients installed later. See
-[installation](docs/installation.md) for platform dependencies and options.
+See [Advanced installation](docs/installation.md#advanced-installation) for options, platform requirements and development setup.
 
 `serve` runs headless in the background; use `open-iphone-use serve --foreground` for
 debugging and `open-iphone-use stop` to stop it. It is not a login or reboot service.
