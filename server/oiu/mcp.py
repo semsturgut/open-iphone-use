@@ -42,9 +42,9 @@ def tools():
         if name == 'advance_feed':
             result[-1]['description'] = 'Advance to the NEXT item with dy=1 (upward drag); dy=-1 returns to the previous item. Presses, drags and releases open-loop with calibration (or a compatible fallback) and never wait for the pointer to be visible, so it works over video apps. Inspect creator/title afterward; HID acceptance is not a transition count.'
         if name in ('ensure_session', 'prepare_session'):
-            result[-1]['description'] = 'Prepare the pointer: a compatible, non-suspect calibration is reused; otherwise the Safari sharing tab is brought to the front and calibrated. Calibration accepts a good fit immediately and remeasures once if poor. Taps use closed-loop corrections; a clearly off landing schedules one automatic recalibration on the next ensure_session. Optional return_app reopens that app via Spotlight after preparation. Errors tell exactly what the owner must do.'
+            result[-1]['description'] = 'Prepare the pointer: a compatible, non-suspect calibration is reused; otherwise the Safari sharing tab is brought to the front and calibrated. Calibration accepts a good fit immediately and remeasures once if poor. Optional return_app reopens that app via Spotlight after preparation. Errors tell exactly what the owner must do.'
         if name in ('pointer_tap', 'pointer_move'):
-            result[-1]['description'] += ' Uses bounded closed-loop corrections. A clearly off observed landing marks calibration for automatic recalibration on the next ensure_session; this action never opens Safari to recalibrate.'
+            result[-1]['description'] += ' Uses bounded corrections and learns consistent landing offsets. Inspect click_sent, verified, landing, predicted_landing and observation_method: predicted and blind landings are unverified, and even an observed landing may miss. Check the returned screen for the UI outcome.'
         if name == 'get_latest_screenshot':
             result[-1]['description'] = 'Read the selected phone screenshot and frame age. For input use an ID captured after this device’s last input completed, at most 120 seconds old. Screen sharing must still be active (latest frame within five seconds).'
         if name in ('get_latest_screenshot', *ACTIONS):

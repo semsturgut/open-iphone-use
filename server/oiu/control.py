@@ -23,7 +23,6 @@ CALIBRATION_BUDGET = 55.0
 GOOD_FIT_RMS = .01
 # Three times the tap tolerance and the maximum residual accepted by fit().
 SUSPECT_MISS = .03
-BIAS_MISS = .012
 log = logging.getLogger(__name__)
 
 
@@ -93,8 +92,11 @@ class Control:
         self.taps = deque(maxlen=64)
         self.hover = None
         self.frame_intervals = deque(maxlen=20)
-        self.landing_errors = deque(maxlen=8)
         self.observation_frames = 0
+        self.observation_wake_remaining = None
+        self.debug_lock = threading.Lock()
+        self.debug_queue = deque(maxlen=30)
+        self.debug_thread = None
         self.generation, self.sending_generation = 0, 0
         self.units = (0,0)
         self.motion_at = 0
@@ -189,6 +191,9 @@ class Control:
         stable_since=None
         reason='Pointer has not appeared'
         self.observation_frames = 0
+        self.last_observation_method = None
+        wakes = 0
+        last_stamp = after
         while time.monotonic()<deadline:
             remaining=deadline-time.monotonic()
             try: stamp,jpeg=self.capture_after(after,max(.001,min(.75,remaining)))
@@ -197,8 +202,11 @@ class Control:
                 if time.monotonic() >= deadline: break
                 # Background Safari can produce one frame per second or slower.
                 # Refresh the auto-hiding pointer while waiting for that frame.
-                self.wake_pointer(-1 if expected and expected[0] > .5 else 1)
-                after=self.motion_at
+                if wakes < 3 and (self.observation_wake_remaining is None or self.observation_wake_remaining > 0):
+                    self.wake_pointer(-1 if expected and expected[0] > .5 else 1)
+                    wakes += 1
+                    if self.observation_wake_remaining is not None: self.observation_wake_remaining -= 1
+                    after=self.motion_at
                 continue
             after=stamp
             self.observation_frames += 1
@@ -206,23 +214,41 @@ class Control:
                 pic=vision.image(jpeg)
                 if abs(pic.width/pic.height-aspect)>.03:
                     raise ValueError('Screen orientation changed; prepare the pointer again')
+            method='direct'
             try: point,rect=vision.pointer(jpeg,board_required=board_required,expected=expected,reference=reference)
             except ValueError as error:
-                previous=None; reason=str(error)
-                if time.monotonic()-self.motion_at >= .75 and time.monotonic() < deadline:
-                    self.wake_pointer(-1 if expected and expected[0] > .5 else 1)
-                    after=self.motion_at
-                continue
+                try:
+                    if board_required or reference is None or expected is None: raise error
+                    point,rect=vision.pointer_difference(jpeg,reference,expected)
+                    method='difference'
+                except ValueError:
+                    previous=None; reason=str(error)
+                    if wakes < 3 and (self.observation_wake_remaining is None or self.observation_wake_remaining > 0) and time.monotonic()-self.motion_at >= .75 and time.monotonic() < deadline:
+                        self.wake_pointer(-1 if expected and expected[0] > .5 else 1)
+                        wakes += 1
+                        if self.observation_wake_remaining is not None: self.observation_wake_remaining -= 1
+                        after=self.motion_at
+                    last_stamp=stamp
+                    continue
             if expected is not None and math.dist(point,expected) > tolerance:
                 previous=None; reason='Pointer has not reached the commanded position'; continue
             if plausible is not None and not plausible(point,rect,jpeg):
                 previous=None; reason='Pointer position is not plausible for the commanded calibration move'; continue
+            recent=list(self.frame_intervals)[-5:]
+            slow=(recent and median(recent)>1/3) or stamp-last_stamp>1/3
+            if slow and not board_required:
+                self.last_observation_method=method
+                return point,rect,stamp
             if previous is None or math.dist(previous,point)>.003:
                 stable_since=stamp
             elif stable_since is not None and stamp-stable_since>=.12:
+                self.last_observation_method=method
                 return point,rect,stamp
             previous=point
-        raise ObservationUnavailable('Timed out waiting for one stable grey AssistiveTouch pointer in two fresh frames. '+reason)
+            last_stamp=stamp
+        message='Timed out waiting for one stable grey AssistiveTouch pointer in two fresh frames. '+reason
+        self.save_debug(message,expected=expected,reference=reference)
+        raise ObservationUnavailable(message)
 
     def wait_tap(self, pressed, point, rect, timeout=3):
         deadline=time.monotonic()+timeout
@@ -400,7 +426,6 @@ class Control:
         else:
             candidate['suspect']=False
             self.calibration=candidate
-            self.landing_errors.clear()
             self.save()
         finally:
             self.calibration_deadline=None
@@ -431,8 +456,57 @@ class Control:
 
     def wake_pointer(self, direction=1):
         # Net zero; move inward first when the target is near the right edge.
-        self.move(direction, 0)
-        self.move(-direction, 0)
+        self.move(3*direction, 0)
+        self.move(-3*direction, 0)
+
+    def landing_offset(self, c):
+        if c.get('landing_frame_size') != list(vision.dimensions(self.jpeg)):
+            c.pop('landing_samples', None)
+            c.pop('landing_frame_size', None)
+            return (0.,0.)
+        samples=c.get('landing_samples', [])
+        if len(samples)<2: return (0.,0.)
+        center=[median(s[i] for s in samples) for i in (0,1)]
+        agreeing=[s for s in samples if math.dist(s,center)<=.01]
+        if len(agreeing)<2: return (0.,0.)
+        offset=[median(s[i] for s in agreeing) for i in (0,1)]
+        magnitude=math.hypot(*offset)
+        if magnitude>.05: offset=[v*.05/magnitude for v in offset]
+        return tuple(offset)
+
+    def save_debug(self, reason, expected=None, landing=None, reference=None):
+        """Schedule bounded best-effort diagnostics without waiting for disk IO."""
+        name=str(time.time_ns())+'-'+uuid.uuid4().hex[:8]
+        def write():
+            while True:
+                with self.debug_lock:
+                    if not self.debug_queue:
+                        self.debug_thread=None
+                        return
+                    name,jpeg,target,reason,expected,landing,reference=self.debug_queue.popleft()
+                try:
+                    directory=self.directory/'debug'
+                    directory.mkdir(mode=0o700,parents=True,exist_ok=True)
+                    paths=[]
+                    for suffix,data in (('frame',jpeg),('reference',reference)):
+                        if data:
+                            path=directory/(name+'-'+suffix+'.jpg'); path.write_bytes(data); paths.append(str(path))
+                    meta=directory/(name+'.json')
+                    meta.write_text(json.dumps(dict(target=target,expected=expected,landing=landing,reason=reason,frames=paths)))
+                    files=sorted(directory.iterdir(),key=lambda p:p.name,reverse=True)
+                    for old in files[30:]: old.unlink(missing_ok=True)
+                    log.warning('pointer_debug %s',meta)
+                except Exception as error:
+                    log.warning('pointer_debug unavailable: %s',type(error).__name__)
+        try:
+            with self.debug_lock:
+                self.debug_queue.append((name,self.jpeg,getattr(self,'debug_target',None),reason,expected,landing,reference))
+                if self.debug_thread is None:
+                    self.debug_thread=threading.Thread(target=write,daemon=True)
+                    self.debug_thread.start()
+            return str(self.directory/'debug'/(name+'.json'))
+        except Exception:
+            return None
 
     def observation_budget(self, minimum=VERIFY_BUDGET):
         recent = list(self.frame_intervals)[-5:]
@@ -451,8 +525,13 @@ class Control:
         if c is None or c.get('version')!=mapping.VERSION or c.get('motion')!=mapping.MOTION:
             raise ValueError('Pointer calibration is missing or incompatible; run ensure_session with Safari sharing visible to calibrate, then retry')
         started=time.monotonic()
+        old_frame=c.get('landing_frame_size')
+        offset=self.landing_offset(c) if calibration is None else (0.,0.)
+        if calibration is None and old_frame is not None and 'landing_frame_size' not in c:
+            self.save()
         self.check_motion_state(c['aspect'])
-        ux,uy=round((x-c['offset_x'])*c['width']),round((y-c['offset_y'])*c['height'])
+        ux,uy=round((max(0,min(1,x-offset[0]))-c['offset_x'])*c['width']),round((max(0,min(1,y-offset[1]))-c['offset_y'])*c['height'])
+        self.debug_target=[x,y]
         self.home()
         self.wake_pointer()
         # Reference has its own small budget. Post-move observation always gets its
@@ -463,19 +542,22 @@ class Control:
         self.move(ux,uy)
         moved_at=time.monotonic()
         deadline=moved_at+self.observation_budget(verify_budget)
-        point=None; first=None; corrections=[]; frames=0
+        point=None; first=None; last_seen=None; corrections=[]; frames=0; predicted=None; method=None
         reason='pointer not observed'
+        self.observation_wake_remaining=3
         try:
             point,_,_=self.wait_pointer(self.motion_at,expected=(x,y), tolerance=.18,
                                        board_required=False,aspect=c['aspect'],
                                        timeout=max(.001,deadline-time.monotonic()),reference=reference)
             frames+=self.observation_frames
-            first=point
+            first=last_seen=point
+            method=self.last_observation_method if hasattr(self,'last_observation_method') else 'direct'
             for _ in range(2):
                 if math.dist(point,(x,y))<=mapping.TOLERANCE or time.monotonic()>=deadline: break
                 dx,dy=round((x-point[0])*c['width']),round((y-point[1])*c['height'])
                 if dx==dy==0: break
                 corrections.append([dx,dy])
+                predicted=[point[0]+dx/c['width'],point[1]+dy/c['height']]
                 correction_reference=self.jpeg
                 self.move(dx,dy)
                 point=None
@@ -483,24 +565,35 @@ class Control:
                                             board_required=False,aspect=c['aspect'],
                                             timeout=max(.001,deadline-time.monotonic()), reference=correction_reference)
                 frames+=self.observation_frames
+                last_seen=point
+                method=self.last_observation_method if hasattr(self,'last_observation_method') else 'direct'
+                predicted=None
         except ObservationUnavailable as error:
             frames+=self.observation_frames
             reason=str(error)
+            self.save_debug(reason,expected=(x,y),landing=last_seen,reference=correction_reference if corrections else reference)
         else:
             reason='measured landing distance %.2f%% of screen' % (100*math.dist(point,(x,y)))
+        finally:
+            self.observation_wake_remaining=None
         self.check_motion_state(c['aspect'])
         verified=bool(point and math.dist(point,(x,y))<=mapping.TOLERANCE)
         if calibration is None and first is not None:
-            errors=(first[0]-x,first[1]-y)
-            self.landing_errors.append(errors)
-            bias=len(self.landing_errors)>=3 and any(abs(sum(e[i] for e in self.landing_errors)/len(self.landing_errors))>BIAS_MISS for i in (0,1))
-            if math.dist(first,(x,y))>SUSPECT_MISS or bias:
+            # Correct for the offset already applied so samples estimate the underlying bias.
+            commanded=(max(0,min(1,x-offset[0])),max(0,min(1,y-offset[1])))
+            errors=[first[i]-commanded[i] for i in (0,1)]
+            c.setdefault('landing_samples',[]).append(errors)
+            c['landing_samples']=c['landing_samples'][-8:]
+            c['landing_frame_size']=list(vision.dimensions(self.jpeg))
+            if point is not None and corrections and math.dist(point,(x,y))>SUSPECT_MISS:
                 c['suspect']=True
-                self.save()
+            self.save()
         self.verification_reason=reason
         self.first_landing_distance=math.dist(first,(x,y)) if first else None
         self.observation = dict(target=[x,y], units=[ux,uy], first_landing=first, final_landing=point, click_sent=False,
                                 corrections=corrections, verified=verified, observation_reason=reason,
+                                landing='observed' if point else ('predicted' if predicted and math.dist(predicted,(x,y))<=mapping.TOLERANCE else 'unknown'),
+                                predicted_landing=predicted, observation_method=method, landing_offset=list(offset),
                                 landing_error=[point[0]-x,point[1]-y] if point else None,
                                 frames_seen=frames, timings=dict(total_seconds=round(time.monotonic()-started,3),
                                 observation_seconds=round(time.monotonic()-moved_at,3)))
@@ -599,12 +692,13 @@ class Control:
                 point,verified=self.absolute(args['x'],args['y'])
                 target='(%s,%s)'%(args['x'],args['y'])
                 if operation=='pointer_tap':
-                    if not verified and (point is not None or not self.trusted_calibration(self.calibration)):
+                    if self.observation['first_landing'] is None and not self.trusted_calibration(self.calibration):
                         raise ValueError('Pointer landing is unverified and calibration is not safe for a blind tap. Keep sharing visible, use the standard pointer and run ensure_session to recalibrate; no click was sent. '+self.verification_reason)
                     self.observation['click_sent'] = None  # A failed transport may leave delivery uncertain.
                     self.click()
                     self.observation['click_sent'] = True
                     if verified: message='Tapped at '+target+'; pointer position visually verified'
+                    elif self.observation['landing']=='predicted': message='Tapped at '+target+' using a predicted landing; final pointer position was not visually verified'
                     elif point is None: message='Tapped at '+target+' using calibration only; pointer was not visible to verify'
                     else: message='Tapped at '+target+'; pointer read (%.3f,%.3f) and was not within 1%% of the target'%point
                 elif verified: message='Pointer is at '+target+'; position visually verified'
@@ -674,6 +768,9 @@ class Control:
             if self.peer: self.radio.release(self.peer)
             result=dict(ok=False,message=str(error))
             if operation in ('pointer_tap','pointer_move') and hasattr(self,'observation'):
+                if not self.observation.get('click_sent'):
+                    self.debug_target=self.observation.get('target')
+                    self.save_debug(str(error),expected=self.observation.get('target'),landing=self.observation.get('final_landing'))
                 result.update(self.observation)
                 if result.get('click_sent') is None: result['message'] += ' A click may have been sent; inspect the screen before retrying.'
                 elif result.get('click_sent'): result['message'] += ' A click was sent; inspect the screen before retrying.'

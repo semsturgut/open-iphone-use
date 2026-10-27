@@ -84,12 +84,15 @@ class PointerTests(TestCase):
     def test_calibration_fits_pointer_not_shifted_event(self):
         with TemporaryDirectory() as directory:
             engine = self.engine(directory)
+            engine.calibration['landing_samples']=[[0,.025],[0,.025]]
+            engine.calibration['landing_frame_size']=[600,1000]
             fixture = fixtures.ControlTests(); fixture.engine = engine
             fixture.calibration_fakes()
             with patch.object(engine, 'wait_tap', side_effect=lambda pressed, point, rect: (point[0],point[1]-.024)):
                 engine.calibrate()
             self.assertAlmostEqual(engine.calibration['offset_y'], 0, places=5)
             self.assertAlmostEqual(engine.calibration['event_pointer_delta']['mean'][1], -.024, places=5)
+            self.assertNotIn('landing_samples',engine.calibration)
             fixture.doCleanups()
 
     def test_unseen_untrusted_does_not_click_and_trusted_reports_blind(self):
@@ -107,15 +110,17 @@ class PointerTests(TestCase):
                 self.assertTrue(result['ok']); self.assertTrue(result['click_sent'])
                 self.assertFalse(result['verified']); self.assertIn('hidden',result['observation_reason'])
                 self.assertEqual((result['frame']['width'], result['frame']['height']), (600,1000))
+            if engine.debug_thread: engine.debug_thread.join(5)
 
-    def test_repeated_signed_bias_marks_suspect(self):
+    def test_repeated_signed_bias_is_learned_without_marking_suspect(self):
         with TemporaryDirectory() as directory:
             engine = self.engine(directory)
             with patch.object(engine,'capture_after',return_value=(time.monotonic(),engine.jpeg)), \
                  patch.object(engine,'wait_pointer',side_effect=[((.5,.52),(0,0,1,1),1),((.5,.5),(0,0,1,1),2)]*3), \
                  patch('oiu.control.time.sleep'):
                 for _ in range(3): engine.absolute(.5,.5)
-            self.assertTrue(engine.calibration['suspect'])
+            self.assertFalse(engine.calibration.get('suspect',False))
+            self.assertEqual(len(engine.calibration['landing_samples']),3)
 
     def test_hidden_pointer_is_woken_while_waiting_for_slow_frames(self):
         with TemporaryDirectory() as directory:
@@ -145,7 +150,7 @@ class PointerTests(TestCase):
         with TemporaryDirectory() as directory:
             engine = self.engine(directory); moves=[]
             with patch.object(engine, 'move', side_effect=lambda x,y:moves.append((x,y))): engine.wake_pointer()
-            self.assertEqual(moves,[(1,0),(-1,0)])
+            self.assertEqual(moves,[(3,0),(-3,0)])
             engine.frame_intervals.extend([.033]*10+[1.])
             self.assertGreaterEqual(engine.observation_budget(),2.5)
             self.assertEqual(vision.dimensions(screen()), (600,1000))

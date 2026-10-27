@@ -76,7 +76,10 @@ class ControlTests(unittest.TestCase):
         deadline=time.monotonic()+2
         while not self.engine.at and time.monotonic()<deadline: time.sleep(.01)
     def tearDown(self):
-        self.running=False; self.thread.join(2); self.tmp.cleanup()
+        self.running=False; self.thread.join(2)
+        for engine in self.radio.engines.values():
+            if engine.debug_thread: engine.debug_thread.join(5)
+        self.tmp.cleanup()
     def test_real_image_calibration_automatic_binding_and_persistence(self):
         result=self.engine.request('ensure_session')
         self.assertTrue(result['ok'],result)
@@ -199,8 +202,8 @@ class ControlTests(unittest.TestCase):
         self.engine.calibrate()
         self.assertEqual(clicks.call_count,8)
         self.assertEqual(moves.call_count,9)  # Seven moves plus a net-zero wake on retry.
-        self.assertEqual(moves.call_args_list[3].args, (1,0))
-        self.assertEqual(moves.call_args_list[4].args, (-1,0))
+        self.assertEqual(moves.call_args_list[3].args, (3,0))
+        self.assertEqual(moves.call_args_list[4].args, (-3,0))
         self.assertEqual(seen[2],seen[3])
 
     def test_measurement_timeout_is_bounded(self):

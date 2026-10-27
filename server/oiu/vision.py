@@ -110,3 +110,28 @@ def pointer(jpeg, board_required=True, expected=None, radius=.18, reference=None
     if len(candidates)!=1:
         raise ValueError('No single grey pointer is visible '+('inside the board' if on_board else 'on the shared screen')+'. Use the standard grey AssistiveTouch pointer, keep it visible and leave pointer size/Zoom unchanged')
     return candidates[0],rect
+
+
+def pointer_difference(jpeg, reference, expected, radius=.18):
+    """Find a localized newly visible grey disc; reject widespread screen changes."""
+    pic, prior = image(jpeg), image(reference)
+    if pic.size != prior.size: raise ValueError('Screen geometry changed while locating the pointer')
+    w,h=pic.size
+    delta=ImageChops.difference(pic,prior).convert('L')
+    mask=delta.point(lambda v: 255 if v >= 12 else 0)
+    if mask.histogram()[255] > w*h*.025: raise ValueError('Screen content changed too broadly')
+    candidates=[]
+    for count,(x0,y0,x1,y1) in components(mask):
+        cw,ch=x1-x0,y1-y0
+        if not (max(5,w//150)<=min(cw,ch) and max(cw,ch)<=w/10 and .75<=cw/ch<=1.33 and .5<=count/(cw*ch)<=.95): continue
+        point=((x0+x1-1)/2/w,(y0+y1-1)/2/h)
+        if math.dist(point,expected)>min(radius,.06): continue
+        pixels=pic.crop((x0,y0,x1,y1))
+        changes=mask.crop((x0,y0,x1,y1))
+        pixdata=pixels.get_flattened_data() if hasattr(pixels,'get_flattened_data') else pixels.getdata()
+        changedata=changes.get_flattened_data() if hasattr(changes,'get_flattened_data') else changes.getdata()
+        pairs=zip(pixdata,changedata)
+        grey=sum(1 for (r,g,b),changed in pairs if changed and 45<=max(r,g,b)<=225 and max(r,g,b)-min(r,g,b)<=50)
+        if grey >= count*.7: candidates.append(point)
+    if len(candidates)!=1: raise ValueError('No localized grey pointer change found')
+    return candidates[0],(0,0,1,1)

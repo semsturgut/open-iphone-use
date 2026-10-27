@@ -249,12 +249,13 @@ class MotionRegressions(unittest.TestCase):
             self.assertFalse(engine.calibration.get('suspect',False))
             self.assertIsNone(engine.first_landing_distance)
             self.assertFalse(engine.path.exists())
+            if engine.debug_thread: engine.debug_thread.join(5)
 
     def test_observed_miss_marks_suspect_and_next_session_recalibrates_once(self):
         for operation in ('pointer_tap','pointer_move'):
             with self.subTest(operation=operation),tempfile.TemporaryDirectory() as directory:
                 engine=self.engine(directory)
-                seen=[((.54,.5),(0,0,1,1),1),((.5,.5),(0,0,1,1),2)]
+                seen=[((.54,.5),(0,0,1,1),1),((.54,.5),(0,0,1,1),2),((.54,.5),(0,0,1,1),3)]
                 with patch.object(engine,'wait_pointer',side_effect=seen),patch.object(engine,'wait_frame'),patch.object(engine,'capture_after',return_value=(time.monotonic(),engine.jpeg)),patch('oiu.control.time.sleep'),patch.object(engine,'calibrate') as calibrate:
                     result=engine.request(operation,x=.5,y=.5)
                     calibrate.assert_not_called()
@@ -298,12 +299,13 @@ class MotionRegressions(unittest.TestCase):
             seen=[((.52,.5),(0,0,1,1),1),((.515,.5),(0,0,1,1),2),((.515,.5),(0,0,1,1),3)]
             with patch.object(engine,'wait_pointer',side_effect=seen) as wait,patch.object(engine,'capture_after',return_value=(time.monotonic(),engine.jpeg)),patch.object(engine,'wait_frame'),patch('oiu.control.time.sleep'):
                 result=engine.request('pointer_tap',x=.5,y=.5)
-            self.assertFalse(result['ok'],result)
+            self.assertTrue(result['ok'],result)
+            self.assertTrue(result['click_sent'])
             self.assertEqual(result['final_landing'],(.515,.5))
             self.assertFalse(result['verified'])
             self.assertAlmostEqual(engine.first_landing_distance,.02)
             self.assertFalse(engine.calibration.get('suspect',False))
-            self.assertFalse(engine.path.exists())
+            self.assertTrue(engine.path.exists())
             self.assertEqual(wait.call_count,3)
             for call in wait.call_args_list:
                 self.assertEqual(call.kwargs['expected'],(.5,.5))
@@ -334,9 +336,10 @@ class MotionRegressions(unittest.TestCase):
             engine=self.engine(directory)
             with patch.object(engine,'wait_pointer',return_value=((.3,.3),(0,0,1,1),1)),patch.object(engine,'wait_frame'),patch('oiu.control.time.sleep'):
                 result=engine.request('pointer_tap',x=.4,y=.4)
-            self.assertFalse(result['ok'],result)
+            self.assertTrue(result['ok'],result)
+            self.assertTrue(result['click_sent'])
+            self.assertFalse(result['verified'])
             self.assertEqual(result['final_landing'],(.3,.3))
-            self.assertIn('no click was sent',result['message'])
 
     def test_old_motion_calibration_is_invalidated(self):
         with tempfile.TemporaryDirectory() as directory:
