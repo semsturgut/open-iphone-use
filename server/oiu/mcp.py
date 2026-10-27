@@ -67,7 +67,7 @@ def handle(args, method, params):
         requested = params.get("protocolVersion")
         version = requested if requested in ("2024-11-05", "2025-03-26", "2025-06-18") else "2024-11-05"
         return dict(protocolVersion=version, capabilities={"tools": {}},
-                    serverInfo={"name": "open-iphone-use-portable", "version": "0.1.0"},
+                    serverInfo={"name": "open-iphone-use-portable", "version": "0.0.3"},
                     instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Returned images include actual pixel width and height. For coordinates use x=px/width and y=py/height over the full image, origin top-left. After swipe, advance_feed or scroll, take a fresh screenshot before targeting because UI may still be animating. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary; a frame captured before the last input completed is rejected. Screen sharing must remain active with a frame in the last five seconds. Red Bluetooth/screen sharing status means control will not work. Owner pairing/sharing/unlocking is required.")
     if method == "ping":
         return {}

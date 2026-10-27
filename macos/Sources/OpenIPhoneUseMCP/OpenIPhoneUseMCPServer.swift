@@ -62,7 +62,7 @@ private func boolean(_ description: String) -> Value {
 @main
 struct OpenIPhoneUseMCPServer {
     static func main() async throws {
-        let server = Server(name: "open-iphone-use", version: "0.0.2", instructions: AgentWorkflow.instructions + " Use x=px/width and y=py/height of the FULL returned image, origin top-left; read the actual image width and height. After scroll, swipe or advance_feed take a fresh screenshot before targeting.", capabilities: .init(tools: .init()))
+        let server = Server(name: "open-iphone-use", version: "0.0.3", instructions: AgentWorkflow.instructions + " Use x=px/width and y=py/height of the FULL returned image, origin top-left; read the actual image width and height. After scroll, swipe or advance_feed take a fresh screenshot before targeting.", capabilities: .init(tools: .init()))
         await server.withMethodHandler(ListTools.self) { _ in .init(tools: tools) }
         await server.withMethodHandler(CallTool.self) { params in
             do {

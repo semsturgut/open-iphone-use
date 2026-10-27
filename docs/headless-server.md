@@ -42,9 +42,9 @@ connected or a share stopped. There is no screen-based guessing or global prepar
 lock. Each phone has its own calibration board, reports, input lock, frame stream and
 cancellation generation. The first web tap calls `ensure_session` for that phone only;
 CLI/MCP can request preparation explicitly. Calibration uses two seed measurements plus
-four board quadrants and the center, fits a fixed 16-unit motion profile, and validates a
-held-out target. It requires Safari's green board, a visible pointer and authenticated tap
-feedback. Older profiles are invalidated and need preparation with Safari in front.
+four board quadrants and the center, then fits a fixed 16-unit motion profile to the visual
+pointer. A good fit is accepted immediately; a poor fit is remeasured once. It requires
+Safari's green board and authenticated tap feedback. Older profiles are invalidated and need preparation with Safari in front.
 A disconnected peer is reported separately from a paused screen; actions require both
 live HID and fresh capture. Re-pairing with a different OS identifier requires remove/new.
 
@@ -199,7 +199,7 @@ are separate future work. [Installation](installation.md), [validation](web-serv
 
 ## Delayed-frame safety and live status
 
-Calibration and coordinate taps wait for exactly one grey pointer to be stable in two different fresh frames, at a plausible commanded position.
+Calibration observes the standard grey pointer on fresh frames, including the default auto-hiding pointer. Coordinate taps use visual observations and frame differences when available.
 Home sends 20 reports on each axis before moving into the board. Board opening also
 requires two stable observations, and delayed tap feedback is matched to the actual press
 and pointer position. A green status dot alone is not a calibration board. No global
@@ -263,17 +263,18 @@ the client closes stdin/stdout (EOF/broken pipe). Diagnostics rotate in `<state>
 ### Pointer accuracy and scroll direction
 
 The capture page reports board-local tap fractions; the receiver maps them to the measured
-board rectangle in the full screenshot. The board detector isolates connected green borders
-from charging icons and status dots. If calibration fails, the server closes the board and
-invalidates the old fit; the page also closes it if server responses stop for ten seconds.
-Keep the standard grey AssistiveTouch pointer, tracking speed, Zoom and orientation stable.
+board rectangle in the full screenshot. The board detector separates green borders from status
+icons. A failed explicit recalibration preserves the stored mapping; failed automatic attempts
+can retry after three minutes. Use `ensure_session` or `prepare_session` with
+`recalibrate=true`, or Safari's **Calibrate pointer** button. Keep pointer appearance, tracking
+speed, Zoom and orientation stable.
 
-Before a coordinate tap, the portable controller homes the pointer, observes the screen
-before and after movement, and permits up to three observed corrections. A visible stable
-pointer must end within 1% of the requested whole-screen fraction before pressing. Ambiguous
-or unobservable pointers fail with no click. The native controller also requires bounded
-visual convergence; ordinary app content or animation may make detection unavailable. These
-checks do not prove which UI element received a click: inspect the resulting screen.
+Coordinate taps use up to three corrections, visual pointer detection and frame differences,
+and learn consistent landing offsets. Results distinguish visually verified, predicted and
+blind landings. A tap is refused when an observed landing is over 3% off target, a hidden
+corrected pointer is predicted over 1% off, or an unseen pointer has untrusted calibration.
+Predicted and blind landings are unverified; even an observed landing does not prove which UI
+element received a click. Inspect the resulting screen after every action.
 
 Positive `scroll(dy)` now sends a positive HID wheel value in both portable and native paths;
 `advance_feed(dy=1)` uses an upward drag to request the next item. The older portable build

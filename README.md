@@ -1,12 +1,16 @@
 # Open iPhone Use
 
-Control your own iPhones through a local CLI server, Bluetooth HID, Safari screen sharing,
-a browser grid and MCP. macOS is the primary platform. Linux uses real BlueZ D-Bus APIs;
-Windows uses real WinRT GATT APIs. No model or AI API key is embedded in the server.
+Control your own iPhones with a local CLI server, Bluetooth HID, Safari screen sharing and an
+image-capable MCP agent. Multiple phones can run at once, each with its own input queue,
+frames and calibration. The server contains no model or AI API key.
+
+The **macOS app and DMG are deprecated and removed**; use the CLI. The `macos/` Swift
+package supplies the headless Bluetooth HID helper used on macOS and retains a legacy MCP
+compatibility test surface.
 
 ## Quick start
 
-From this source checkout on macOS or Linux:
+From a reviewed checkout on macOS or Linux:
 
 ```sh
 sh setup.sh
@@ -20,145 +24,93 @@ On Windows:
 open-iphone-use serve
 ```
 
-Setup installs an isolated Python runtime, the native macOS HID helper when applicable,
-and MCP registration for detected Codex, Claude Code, Cursor, OpenCode and Command Code clients.
-The canonical skill lives only at `~/.agents/skills/open-iphone-use/SKILL.md`; client
-skill directories use relative aliases (Windows junction/copy fallback).
-macOS needs Xcode/Swift 6; Linux needs BlueZ/D-Bus; Windows needs a peripheral-capable
-Bluetooth driver. Follow owner-controlled Bluetooth permission and pairing prompts.
-Use the checked-out installer for this development branch; remote `main` may be older.
+Setup installs a managed runtime and the `open-iphone-use` CLI. It registers MCP for detected
+Codex, Claude Code, Cursor, OpenCode and Command Code clients, and installs the agent skill
+at `~/.agents/skills/open-iphone-use`; detected Claude Code and Command Code clients get
+aliases to it (Windows can use a junction or copy fallback). Restart clients after setup.
+Run `open-iphone-use register-agents` to register clients installed later. macOS needs Swift 6;
+see [installation](docs/installation.md) for platform dependencies and options.
 
-`serve` starts in the **background by default**, survives closing the launching terminal,
-and prints only the local Web UI, Bluetooth state, log path and useful commands:
+`serve` runs headless in the background; use `open-iphone-use serve --foreground` for
+debugging and `open-iphone-use stop` to stop it. It is not a login or reboot service.
+Open the Web UI at **http://127.0.0.1:27893**: it is loopback-only and needs no token.
+Any local process can operate it, so do not expose it through a proxy. Each device card
+shows independent green/red Bluetooth and screen-sharing lights, a live thumbnail and
+frame age.
 
-```text
-Open iPhone Use is running
-Web UI:  http://127.0.0.1:27893
-Bluetooth: ● on  (advertising)
-Add a phone: open-iphone-use new
-Stop:      open-iphone-use stop
-Log:       /.../.open-iphone-use/server.log
-```
+![Local web UI with two iPhone cards, status lights, live thumbnails and sharing controls](docs/media/web-ui.png)
 
-Open the Web UI directly. **No token or login link is needed.** Operator UI/API access is
-restricted to the loopback listener and loopback clients, with Host/Origin checks; the
-LAN HTTPS capture listener cannot serve operator requests. Any local process with access
-to the loopback port can operate the server. Do not expose that port through a proxy.
-Use `open-iphone-use serve --foreground` for terminal debugging. Background execution is
-not an automatic login/reboot service. Logs are private (0600) in the state directory.
+## Pair and share each iPhone
 
-## Pair, add and share each phone
+1. Unlock the iPhone, enable AssistiveTouch, then pair the host under **Settings →
+   Accessibility → Touch → AssistiveTouch → Devices → Bluetooth Devices**. Approve the
+   owner's pairing prompts. Both keyboard and pointer HID subscriptions must be connected.
+2. Choose the connected phone in the Web UI or run `open-iphone-use new` (`add` is an
+   alias). `open-iphone-use bluetooth` lists candidates; `new --bt PEER_ID` selects an exact
+   peer. Bluetooth supplies owner device names where available; generic or duplicate names
+   get fallbacks. Do not infer identity from a name.
+3. Each phone gets a private sharing link and QR. Use Copy or, where supported, Share and
+   the system share sheet (including AirDrop where available). On first use install the
+   public CA on the phone, verify its SHA-256 fingerprint against the terminal, and enable
+   trust in **Settings → General → About → Certificate Trust Settings**. Open that phone's
+   link in Safari and approve **Start sharing**. Repeat for each phone.
 
-1. On the unlocked iPhone enable AssistiveTouch. Open **Settings → Accessibility → Touch →
-   AssistiveTouch → Devices → Bluetooth Devices → Open iPhone Use** and approve pairing.
-   Windows may advertise the PC name. Both keyboard and pointer HID subscriptions must
-   be live; a remembered Bluetooth bond alone is insufficient. On headless Linux, keep
-   an owner-operated `bluetoothctl` session with `agent KeyboardDisplay` and
-   `default-agent` for pairing-code confirmation; the detached server cannot approve it.
-2. Select that phone from **Bluetooth-connected phones** in the Web UI, or run:
-
-   ```sh
-   open-iphone-use bluetooth
-   open-iphone-use new                  # selects one available phone, otherwise prompts
-   open-iphone-use new --bt PEER_ID      # explicit choice, required for ambiguous scripts
-   ```
-
-   Each record is permanently bound to the selected Bluetooth peer and gets its own
-   private sharing URL and QR. Names come from Bluetooth. Generic/unavailable names fall
-   back to `iPhone`; duplicate names get a short peer-ID suffix. Never infer identity from
-   a name. If needed, pair/add one phone at a time to identify its QR.
-3. On first use install the public CA on the phone, verify its SHA-256 fingerprint against
-   the terminal, then enable it in **Settings → General → About → Certificate Trust
-   Settings**. `new`/`link` show the CA address and fingerprint; only public certificate
-   bytes are downloadable. No desktop certificate trust is needed for the loopback UI.
-4. Scan the phone's QR **on that same phone**, open Safari and approve **Start sharing**.
-   Each added phone is immediately visible in the side-by-side grid, with a waiting
-   placeholder until frames arrive. Share/AirDrop (when supported), Copy and QR persist.
-5. Tap a live tile. Its first tap prepares the pointer with Safari visible. Calibration
-   tolerates lagging frames: it waits for a stable board and pointer in fresh frames,
-   then validates the fitted mapping before coordinate taps. Inspect each result.
-
-For **two iPhones**, repeat the sequence for each. Bindings, frames, calibration, input
-queues, report state and cancellation are per phone. One phone's calibration waits or
-backpressure do not hold a global action lock. CoreBluetooth notifications name a specific
-central; BlueZ/WinRT also target a specific peer. Older BlueZ shared-notify implementations
-require one phone per adapter and reject ambiguous broadcasts.
-
-Each tile and the global header show separate Bluetooth and Screen share lights. Red
-means **control won't work**. CLI and MCP expose the same booleans and status messages.
-Both Bluetooth and fresh screen sharing are required; do not switch to another phone
-when the intended one disconnects.
-
-## CLI, MCP and skill
+The capture page requests video at an ideal **30 fps**; actual delivery depends on the
+phone and network. Capture links are credentials: keep them private. Only the owner pairs,
+trusts certificates, unlocks the phone and approves sharing. Bluetooth and fresh screen
+sharing are both required for control.
 
 ```sh
-open-iphone-use devices
-open-iphone-use status --device DEVICE_ID
-open-iphone-use link DEVICE_ID           # re-show private URL and width-aware terminal QR
-open-iphone-use remove DEVICE_ID         # also supports remove --device DEVICE_ID
-open-iphone-use action --device DEVICE_ID ensure_session --arguments '{}'
-open-iphone-use action --device DEVICE_ID pointer_tap \
-  --arguments '{"expectedFrameID":"RECENT_FRAME_ID","x":0.5,"y":0.5}'
-open-iphone-use action --device DEVICE_ID stop_control
+open-iphone-use devices                    # list registered phones
+open-iphone-use status --device DEVICE_ID  # inspect a phone
+open-iphone-use link DEVICE_ID             # show its link and QR again
+open-iphone-use remove DEVICE_ID           # remove phone and revoke its link
 open-iphone-use stop
 ```
 
-The server must remain running for links to work; device links survive restart. A terminal
-QR uses black-on-white Unicode half-blocks with a quiet zone and adapts to column width.
-If it cannot fit without wrapping, the CLI prints a warning and the link alone.
+`remove --device DEVICE_ID` is also supported. Removal cancels that phone's input and clears
+its frames and calibration; it does not remove its OS Bluetooth bond. See
+[headless server](docs/headless-server.md) for reconnect and network details.
 
-The grid keeps screen taps, sharing controls and Remove. Keyboard, Home, typing, scroll
-and explicit release/preparation are available through CLI/MCP. Remove asks for confirmation
-in the UI, cancels running/queued input, clears frames and calibration, and revokes the
-capture token permanently. Other phones and OS Bluetooth bonds remain intact.
+## Pointer and MCP
 
-Setup registers `open-iphone-use mcp` as a stdio server and installs the bundled
-[Open iPhone Use skill](macos/Resources/open-iphone-use-skill/SKILL.md). Restart your MCP
-client after setup. Run `open-iphone-use register-agents` to register clients installed later.
-OpenCode JSON/JSONC comments and unrelated settings are retained; private backups precede
-config edits. Old application entries, duplicate skills and product backup files are cleaned.
-MCP stays available when the web server is down: tools return
-“Server not running — start it with: open-iphone-use serve”; start the service and retry
-without restarting the MCP client. Diagnostics go to `~/.open-iphone-use/mcp.log` (or
-`--state`/`OIU_STATE`), never protocol stdout. EOF/closed pipes disconnect cleanly.
-Use `list_bluetooth_candidates`/`create_device` for requested setup;
-then `list_devices`, select an explicit `device_id`, inspect its screenshot and act.
-`ensure_session` and `prepare_session` obtain their own fresh frames and **do not require
-expected_frame_id**. Other input accepts that phone's screenshot ID for up to 120 seconds,
-provided the frame was captured after its last input completed. Call `get_latest_screenshot`
-after every action, including preparation, before choosing the next input. Screen sharing
-must still be active with a frame in the last five seconds. Unknown, old, pre-action or
-stopped-stream IDs fail. HID acceptance alone is not UI success.
+The default auto-hiding AssistiveTouch pointer is supported. With Safari sharing visible,
+preparation measures seven samples on its calibration board and fits the visual pointer;
+a good fit is accepted immediately, while a poor fit is remeasured once. Compatible
+calibration is reused. Explicitly recalibrate with `ensure_session` or `prepare_session`
+using `recalibrate=true`, or Safari's **Calibrate pointer** button. After a failed automatic
+attempt, another automatic attempt can be made after three minutes; a failed explicit attempt
+preserves the stored mapping. Keep pointer appearance, tracking speed, Zoom and orientation
+stable.
 
-After a later server restart, the helper publishes the same HID service and advertises
-again for bonded phones; macOS also restores CoreBluetooth services/subscriptions when
-available. Keep using the same installation and state directory. iOS owns reconnection:
-if a phone stays red, unlock it and select the existing **Open iPhone Use** entry under
-AssistiveTouch > Devices > Bluetooth Devices. Re-pair only if the OS lost its bond.
-Automatic reconnect timing, driver limits and OS-managed GATT caching still need hardware
-verification. Bluetooth reconnection does not resume Safari screen sharing; approve it again.
-See [platform reconnect details](docs/headless-server.md#bluetooth-reconnection).
+Coordinate taps use bounded corrections and learn consistent landing offsets. Results report
+whether the landing was visually verified, observed without verification, predicted, or blind;
+predicted and blind results are unverified. A tap is refused when an observed landing is over 3% off target, a hidden
+corrected pointer is predicted over 1% off, or an unseen pointer has untrusted calibration.
+Even a verified landing does not prove the intended UI changed: inspect the screen after
+**every action**.
 
-## Network and safety
+The portable MCP server exposes:
 
-Keep the host and phones on a trusted private network. Auto LAN mode refreshes sharing
-links/certificates when the network changes; open a new link and reapprove sharing on the
-phone. Explicit `--host` and custom `--cert`/`--key` configurations stay fixed. Operator
-access always stays loopback-only. Capture links are credentials; never publish them.
-Only the owner can pair, trust certificates, unlock and approve iOS sharing.
+- Device setup and status: `list_bluetooth_candidates`, `create_device`, `remove_device`,
+  `list_devices`, `get_device_status`, `get_latest_screenshot`, `stop_control`.
+- Preparation and pointer: `ensure_session`, `prepare_session`, `pointer_quick_probe`,
+  `pointer_home`, `pointer_move`, `pointer_tap`, `move_pointer`, `click`, `set_page_board`.
+- Input and navigation: `type_text`, `send_key`, `scroll`, `swipe`, `advance_feed`.
 
-Text uses the US ASCII layout. Protected content, locking and iOS permission boundaries
-remain in force. Radio limits, real Bluetooth names, two-phone input/reconnection and
-Linux/Windows behavior need hardware checks; automated transport/image tests are separate
-from physical proof. The owner's live diagnosis established delayed pointer rendering;
-the latency fixes still need a repeat physical run. See [validation](docs/web-server-validation.md),
-[server details](docs/headless-server.md), [installation](docs/installation.md) and
-[contributing](CONTRIBUTING.md). Distribution and release builds use the CLI/setup workflow.
+Select an explicit device and inspect its screenshot. Preparation takes its own fresh frames;
+other input requires a frame ID captured after that phone's last input, at most 120 seconds
+old, while screen sharing remains active with a frame received within five seconds. Results
+include image dimensions; coordinates are fractions of the full image. Input is serialized
+per device and released on cancellation. Stale frames and unavailable control are rejected;
+HID delivery alone does not establish UI success. Text uses the US ASCII layout, and iOS
+permissions, protected content and locking remain in force.
 
+macOS has been tested with an iPhone. Linux/BlueZ and Windows/WinRT backends exist and should
+work in principle, but have **not been tested on real hardware**; reports and pull requests
+are welcome. On macOS, two iPhones have been shared and connected at the same time, and a
+paired iPhone reconnected over Bluetooth within a few seconds after a server restart. See the
+[validation record](docs/web-server-validation.md) for what was actually tested.
 
-Coordinate taps require a visible, stable AssistiveTouch pointer and up to three visual
-corrections; if it cannot reach the target within 1% of the screen, the action fails without a
-click. Keep pointer appearance, tracking speed, Zoom and orientation fixed after preparation.
-Calibration uses a green board and seven measurements; a stale or interrupted board closes
-and reports a retry instruction. Positive `scroll(dy)` advances content on iOS; inspect each
-result because individual apps may interpret wheel input differently.
+Read the [changelog](CHANGELOG.md), [documentation](docs/), and
+[contributing guide](CONTRIBUTING.md).

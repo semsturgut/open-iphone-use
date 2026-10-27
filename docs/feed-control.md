@@ -18,38 +18,21 @@ the bundled MCP server and native bridge, not a chat-specific prompt or a model 
 Do not repeat an uncertain like, comment or submission. Feed navigation never presses
 like, follow, subscribe, playback or share controls deliberately.
 
-## What the native bridge sends
+## What the portable server sends
 
-`advance_feed` defaults to `mode: swipe`: it moves to a calibrated central location,
-presses the left mouse button, drags vertically, and releases. Next goes from whole-screen
-(0.5,0.76) toward (0.5,0.24); previous reverses it. HID reports use the measured motion
-profile and BLE backpressure. Press/drag/release is one serialized action. Error and stop
-paths release input. It does not start a drag at the status bar or from a side action rail.
+`advance_feed(dy: 1)` performs an upward drag to request the next item; `dy: -1`
+requests the previous item. `scroll(dy: ...)` sends raw HID wheel ticks for lists and grids.
+App sensitivity varies. Input is serialized and released on cancellation. A successful HID
+response does not establish the displayed item: inspect the screen after each gesture.
+The current implementation is in `server/oiu/control.py` and `server/oiu/mcp.py`.
 
-`scroll(dy: ...)` sends HID wheel reports for lists/grids. It is not the default video
-navigation action. An explicit `advance_feed(mode: wheel, steps: 120)` fallback exists
-for app/device combinations where a wheel works; it is not an automatic blind retry.
-Wheel sensitivity differs by app/device. Both feed directions accept one item per call:
-`dy` must be 1 or -1. A successful HID response confirms input delivery, not an exact
-semantic item count. `swipe(direction: ...)` is the general directional drag tool.
+## Installing on another host
 
-Implementation: `OpenIPhoneUseController+Pointer.swift` (`advanceFeed`, `swipeScreen`),
-`BLEHIDPeripheral.swift` (`swipe`), `OpenIPhoneUseMCPServer.swift` (tool schemas/parsing),
-and `AgentWorkflow.swift` (MCP initialization instructions).
-
-## Installing on another Mac
-
-Run the Mac app, pair that Mac with the iPhone, enable AssistiveTouch, approve screen
-sharing, and register that installation's bundled `open-iphone-use-mcp` executable in the
-chosen MCP client. See `macos/README.md` for paths/configuration and local HTTPS setup.
-Do not copy another owner's capture token, certificate private key or saved calibration.
-The capture URL belongs to that Mac; the device is calibrated locally. No provider API
-key is required by the bridge. The model comes from the chosen MCP client.
-
-MCP initialization supplies the workflow, so the owner can ask for ordinary actions
-without naming tools. Registration is per client; reconnect after upgrading the helper
-so the client reloads its catalog. The bridge has no public MCP TCP listener. Pairing,
-AssistiveTouch and iOS sharing consent remain owner setup steps.
+Install with `setup.sh` on macOS/Linux or `setup.ps1` on Windows, start the CLI server,
+pair the phone, enable AssistiveTouch and approve Safari screen sharing. Setup registers
+the portable MCP server for detected clients; see [installation](installation.md). Do not
+copy another owner's capture token, private key or calibration. Windows and Linux have not
+been tested on real hardware. The model comes from the chosen MCP client.
 
 ## Physical evidence, 2026-10-23
 
@@ -66,7 +49,7 @@ pause/resume taps. Each transition was visually inspected separately. A second a
 or title proved navigation; transport success alone was not counted. No like, follow,
 comment or subscription was requested or deliberately sent.
 
-These results establish the installed path on this device. Other iOS versions, pointer
+These historical results establish the earlier app path on this device, not the current CLI path. Other iOS versions, pointer
 settings, app versions and Macs still require bring-up testing; they are not universal
 compatibility evidence. The protocol is model-independent, but an agent must still
 recognize the correct screen and honor the verification workflow.

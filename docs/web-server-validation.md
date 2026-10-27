@@ -1,6 +1,6 @@
 # Headless and multi-device validation — 2026-10-26
 
-This record covers `feature/web-multi-device-crossplatform`, including the completion
+This historical record covers `feature/web-multi-device-crossplatform` as of 2026-10-26, including the completion
 checks after WIP commit `5d8528c`. Software checks, native radio capability and physical
 phone outcomes are separate evidence.
 
@@ -22,7 +22,7 @@ phone outcomes are separate evidence.
 | Web JavaScript / existing Mac build scripts | Node syntax and Bash syntax checks passed |
 | Diff whitespace | Passed |
 
-The Python tests exercise generated image-based two-click calibration, automatic association
+At that time, the Python tests exercised generated image-based two-click calibration, automatic association
 of two synthetic phones, targeted keyboard reports, saved peer/calibration state, stale-frame
 rejection, input release/cancellation, and cancellation of shared pairing probes. A stop or
 stale candidate now aborts further probe movement and closes every association board.
@@ -80,8 +80,8 @@ PowerShell. The installer test must use a temporary HOME, install root and bin d
 - Simultaneous physical phone control, connection capacity and reconnect behavior.
 - Linux/BlueZ and Windows/WinRT execution, permissions, drivers and real notification delivery.
 - Full Windows installer execution and Windows state ACL behavior.
-- Native app WKWebView runtime behavior, full app/DMG packaging, clean-machine installation,
-  signing/notarization, release delivery and internet deployment.
+- Clean-machine CLI installation, release delivery and internet deployment. The native app and
+  DMG have since been removed.
 - Historical iOS project checks: this checkout has no `ios/` tree.
 
 The earlier demo/device-matrix results describe the standalone Mac path. No push, release

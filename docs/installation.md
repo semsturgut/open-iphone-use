@@ -1,9 +1,12 @@
 # CLI installation and removal
 
 `setup.sh` supports macOS and Linux; `setup.ps1` supports Windows. Run the script from
-this branch to install unmerged work. Remote `main` installers install the source on
-`main`, not this feature branch. A downloaded installer can use `OIU_REF` to select an
+a reviewed checkout. Remote `main` installers install the source on `main`, which may differ
+from your checkout. A downloaded installer can use `OIU_REF` to select an
 archive ref or `OIU_SOURCE_DIR` to use an already reviewed checkout.
+
+The macOS app and DMG are deprecated and removed; use the CLI. Windows and Linux backends
+have not been tested on real hardware; reports and pull requests are welcome.
 
 ## macOS / Linux
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-iphone-use-server"
-version = "0.1.0"
+version = "0.0.3"
 requires-python = ">=3.11"
 description = "Portable, local multi-iPhone capture and control server"
 dependencies = [

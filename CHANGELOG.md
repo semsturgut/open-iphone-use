@@ -1,12 +1,24 @@
 # Changelog
 
-## Unreleased — CLI-first multi-phone workflow
+## 0.0.3 — CLI-first multi-iPhone release (2026-10-27)
+
+- Target 30 fps Safari capture; actual frame delivery depends on the phone and network.
+- Fit seven calibration samples on the visual pointer, accept a good fit without a held-out
+  step, and remeasure a poor fit. Support the default auto-hiding AssistiveTouch pointer.
+- Detect landings using visual observations and frame differences; report verified, predicted
+  or blind taps, use bounded corrections, refuse unsafe misses, and learn landing offsets.
+- Allow explicit recalibration through preparation tools or Safari; failed attempts do not
+  permanently lock recalibration, and automatic attempts can retry after three minutes.
+- Include image dimensions in screenshot/action results; improve Bluetooth lifecycle and
+  subscription handling. Inspect the resulting screen: predicted and blind taps are
+  unverified, and even a verified pointer landing does not prove the UI outcome.
+- Windows and Linux backends are implemented but have not been tested on real hardware.
 
 - Align portable and native HID scroll signs; `advance_feed(dy=1)` targets the next item.
 - Detect the calibration board separately from charging/status icons, retry stable frames,
   close interrupted boards, and fit seven fixed-cadence samples per phone.
-- Verify visually settled pointer positions and correct bounded misses before coordinate
-  clicks; reject ambiguous or non-converging targets without clicking.
+- Observe pointer positions and correct bounded misses before coordinate clicks; report
+  unverified landings and refuse those outside the safety limits.
 
 
 - Install one canonical agent skill with Claude/Command Code aliases; register OpenCode
