@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from PIL import Image,ImageDraw
 from oiu import vision
-from oiu.control import Control,Pairing
+from oiu.control import Control,Pairing,ObservationUnavailable
 
 
 def jpeg(pic):
@@ -237,7 +237,7 @@ class MotionRegressions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory,patch('oiu.vision.pointer',side_effect=ValueError('No single grey pointer is visible on the shared screen; no click was sent')) as locate:
             engine=self.engine(directory)
             started=time.monotonic()
-            with patch.object(engine,'wait_pointer',side_effect=ValueError('Timed out waiting for one stable grey AssistiveTouch pointer in two fresh frames; no click was sent')),patch.object(engine,'wait_frame'),patch('oiu.control.time.sleep'):
+            with patch.object(engine,'wait_pointer',side_effect=ObservationUnavailable('Timed out waiting for one stable grey AssistiveTouch pointer in two fresh frames; no click was sent')),patch.object(engine,'wait_frame'),patch('oiu.control.time.sleep'):
                 result=engine.request('pointer_tap',x=.5,y=.5)
             self.assertTrue(result['ok'],result)
             self.assertIn('using calibration only',result['message'])
