@@ -1,7 +1,7 @@
 """Fit fixed-cadence HID units to measured whole-screen coordinates."""
 import math
 
-VERSION = 3
+VERSION = 4
 MOTION = 'vertical-horizontal-16units-8ms-home-each'
 TOLERANCE = .01
 

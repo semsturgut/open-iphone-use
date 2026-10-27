@@ -87,9 +87,10 @@ class FakeAudioContext {
   close() { audio.closed += 1; this.state = 'closed'; return Promise.resolve(); }
 }
 
+const fakeWindow = { ...listeners(), AudioContext: FakeAudioContext, innerWidth: 400, innerHeight: 800 };
 vm.runInNewContext(script, {
   document,
-  window: { ...listeners(), AudioContext: FakeAudioContext, innerWidth: 400, innerHeight: 800 },
+  window: fakeWindow,
   location: { search: '?token=test' },
   navigator: {
     wakeLock: { async request(kind) {
@@ -261,13 +262,14 @@ board.handlers.pointerdown({ clientX: 100, clientY: 400 });
 await flush();
 const tap = requests.filter(r => r.path === '/api/tap').at(-1);
 assert.ok(tap, 'a tap on the board must be reported to the Mac');
-assert.deepEqual(JSON.parse(tap.options.body), { x: 0.25, y: 0.5 }, 'the tap must be a board-local fraction');
+assert.deepEqual(JSON.parse(tap.options.body), { x: 0.25, y: 0.5, geometry: {client: {x:100,y:400}, board: {left:0,top:0,width:400,height:800}, visualViewport:null} }, 'tap reports fractions and DOM geometry');
 assert.equal(JSON.parse(status.textContent).board, true, 'the status must say the board is up');
+fakeWindow.visualViewport = {offsetLeft: 3, offsetTop: 11, width: 320, height: 640, scale: 1.5};
 board.getBoundingClientRect = () => ({ left: 20, top: 80, width: 320, height: 640 });
 board.handlers.pointerdown({ clientX: 100, clientY: 400 });
 await flush();
 assert.deepEqual(JSON.parse(requests.filter(r => r.path === '/api/tap').at(-1).options.body),
-  { x: 0.25, y: 0.5 }, 'Safari viewport offsets/zoom must not change board-local tap fractions');
+  { x: 0.25, y: 0.5, geometry: {client: {x:100,y:400}, board: {left:20,top:80,width:320,height:640}, visualViewport:{offsetLeft:3,offsetTop:11,width:320,height:640,scale:1.5}} }, 'Safari viewport offsets/zoom must not change board-local tap fractions');
 const leases = [...timers.values()].filter(timer => timer.delay === 10000);
 assert.equal(leases.length, 1, 'an open board has one renewable lease');
 leases[0].cb();

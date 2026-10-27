@@ -266,7 +266,7 @@ public final class OpenIPhoneUseController: ObservableObject {
             let captureMessage = await frames.error()
             let wire = ScreenshotFrameWire(frameID: frame.frameID, capturedAt: frame.capturedAt,
                                            ageMilliseconds: age, captureActive: captureActive,
-                                           mimeType: "image/jpeg", base64: frame.jpeg.base64EncodedString())
+                                           mimeType: "image/jpeg", jpeg: frame.jpeg)
             return BrokerResponse(requestID: request.requestID, ok: true,
                                   message: "Latest iPhone frame; age=\(age) ms; captureActive=\(captureActive)." + (captureMessage.map { " \($0)" } ?? ""),
                                   frame: wire)
@@ -536,8 +536,10 @@ public final class OpenIPhoneUseController: ObservableObject {
         let wire = ScreenshotFrameWire(frameID: frame.frameID, capturedAt: frame.capturedAt,
                                        ageMilliseconds: age,
                                        captureActive: age <= maximumFrameAgeMilliseconds && storeActive,
-                                       mimeType: "image/jpeg", base64: frame.jpeg.base64EncodedString())
-        return BrokerResponse(requestID: request.requestID, ok: true, message: message,
+                                       mimeType: "image/jpeg", jpeg: frame.jpeg)
+        let settleHint = ["swipe", "advance_feed", "scroll"].contains(request.operation)
+            ? " UI may still be animating; take a fresh screenshot before targeting." : ""
+        return BrokerResponse(requestID: request.requestID, ok: true, message: message + settleHint,
                               commandID: commandID, frame: wire)
     }
 

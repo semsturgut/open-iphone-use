@@ -57,7 +57,9 @@ def show_link(args, device):
 
 def print_running(url,status,log):
     on=status.get('bluetooth_on',False)
-    dot=('● ' if sys.stdout.isatty() else '')+('on' if on else 'off')
+    state=status.get('bluetooth_state','unknown')
+    label='initializing' if state in ('starting','waitingForBluetooth','publishing','resetting') else ('on' if on else 'off')
+    dot=('● ' if sys.stdout.isatty() else '')+label
     from .qr import enable_ansi
     if sys.stdout.isatty() and enable_ansi(): dot=('\x1b[32m' if on else '\x1b[31m')+dot+'\x1b[0m'
     print('Open iPhone Use is running')

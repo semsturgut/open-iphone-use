@@ -2,6 +2,7 @@
 from collections import deque
 from dataclasses import dataclass, field
 import json
+import base64
 import os
 from pathlib import Path
 import secrets
@@ -9,6 +10,7 @@ import threading
 import time
 import uuid
 
+from . import vision
 from .backends import CaptureOnlyBackend
 from .permissions import secure_directory
 from .names import specific, distinguish
@@ -124,6 +126,12 @@ class Device:
                             # The backend reports when the HID input actually ended;
                             # frames captured after that moment are valid for the next action.
                             self.last_input_completed_at = result.get("inputEndedAt") if isinstance(result.get("inputEndedAt"), float) else time.monotonic()
+                    frame = result.get('frame')
+                    if isinstance(frame, dict) and frame.get('base64'):
+                        raw = base64.b64decode(frame['base64'], validate=True)
+                        frame['width'], frame['height'] = vision.dimensions(raw)
+                    if operation in ('swipe','advance_feed','scroll') and result.get('ok'):
+                        result.update(settled=False, settle_hint='UI may still be animating; take a fresh screenshot before targeting.')
                     return result
                 except (OSError, ValueError):
                     with self.lock:
@@ -204,10 +212,17 @@ class Registry:
     def create_bluetooth(self, bt_id):
         if not isinstance(bt_id, str) or not bt_id or len(bt_id) > 512:
             raise ValueError('Select a Bluetooth-connected phone using bt_id')
+        with self.lock:
+            if bt_id in self.retiring: raise ValueError('This Bluetooth phone is still being removed; retry shortly')
+            existing = next((d for d in self.devices.values() if d.bt_id == bt_id), None)
+            if existing: return existing
         peer = next((p for p in self.bluetooth_peers() if p['id'] == bt_id), None)
         if peer is None:
             raise ValueError('Bluetooth HID connection required; connect both keyboard and pointer reports before adding this phone')
-        return self.create(peer['name'], bt_id, peer['name_source'])
+        with self.lock:
+            existing = next((d for d in self.devices.values() if d.bt_id == bt_id), None)
+            if existing: return existing
+            return self.create(peer['name'], bt_id, peer['name_source'])
 
     def capture_device(self, token):
         with self.lock:

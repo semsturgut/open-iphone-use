@@ -198,7 +198,9 @@ class ControlTests(unittest.TestCase):
         clicks.side_effect=click
         self.engine.calibrate()
         self.assertEqual(clicks.call_count,8)
-        self.assertEqual(moves.call_count,7)
+        self.assertEqual(moves.call_count,9)  # Seven moves plus a net-zero wake on retry.
+        self.assertEqual(moves.call_args_list[3].args, (1,0))
+        self.assertEqual(moves.call_args_list[4].args, (-1,0))
         self.assertEqual(seen[2],seen[3])
 
     def test_measurement_timeout_is_bounded(self):

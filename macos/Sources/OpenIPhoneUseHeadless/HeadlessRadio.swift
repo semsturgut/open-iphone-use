@@ -67,7 +67,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
         for id in Array(peers.keys) { await release(id) }
         nameResolver.stop()
         manager?.stopAdvertising()
-        manager?.removeAllServices()
+        // Preserve the restored GATT database; explicit removal forces a service change.
         broker?.stop()
         manager = nil
     }
@@ -127,7 +127,7 @@ final class HeadlessRadio: NSObject, @preconcurrency CBPeripheralManagerDelegate
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         guard peripheral.state == .poweredOn else {
             advertisingPending = false
-            if peripheral.state == .resetting {
+            if peripheral.state == .resetting || peripheral.state == .poweredOff {
                 publishedService = nil; keyboard = nil; mouse = nil
                 for id in peers.keys { reportQueue.cancel(peer: id, forget: true) }
                 peers.removeAll(); subscriptions.removeAll()

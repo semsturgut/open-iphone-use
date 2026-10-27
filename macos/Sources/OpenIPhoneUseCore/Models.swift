@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 public struct DeviceSummary: Codable, Sendable, Equatable {
     public let deviceID: String
@@ -113,6 +114,19 @@ public struct ScreenshotFrameWire: Codable, Sendable {
     public let captureActive: Bool
     public let mimeType: String
     public let base64: String
+    public let width: Int?
+    public let height: Int?
+
+    init(frameID: String, capturedAt: Date, ageMilliseconds: Int, captureActive: Bool,
+         mimeType: String, jpeg: Data) {
+        self.frameID = frameID; self.capturedAt = capturedAt
+        self.ageMilliseconds = ageMilliseconds; self.captureActive = captureActive
+        self.mimeType = mimeType; self.base64 = jpeg.base64EncodedString()
+        let source = CGImageSourceCreateWithData(jpeg as CFData, nil)
+        let props = source.flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any] }
+        self.width = props?[kCGImagePropertyPixelWidth] as? Int
+        self.height = props?[kCGImagePropertyPixelHeight] as? Int
+    }
 }
 
 public enum OpenIPhoneUseLimits {

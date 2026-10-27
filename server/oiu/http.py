@@ -10,6 +10,7 @@ import sys
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+from . import vision
 from .core import MAX_FRAME
 
 WEB = Path(__file__).parent / "web"
@@ -168,7 +169,7 @@ class Handler(BaseHTTPRequestHandler):
                     x, y = float(data["x"]), float(data["y"])
                     if not (0 <= x <= 1 and 0 <= y <= 1):
                         raise ValueError("Tap outside screen")
-                    return self.reply(device.backend.request("capture_tap", x=x, y=y))
+                    return self.reply(device.backend.request("capture_tap", x=x, y=y, geometry=data.get("geometry")))
                 data = json.loads(body or b'{}')
                 if data.get('force') is True:
                     return self.reply(device.action('prepare_session', {'expectedFrameID': device.frame_id}))
@@ -210,6 +211,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.reply(dict(ok=True, device=device.summary(), frame=dict(
                             frameID=device.frame_id, ageMilliseconds=device.summary()["age_ms"],
                             captureActive=device.summary()["capture_active"],
+                            width=vision.dimensions(device.jpeg)[0], height=vision.dimensions(device.jpeg)[1],
                             base64=base64.b64encode(device.jpeg).decode(), mimeType="image/jpeg")))
                 if not post and parts[3] == "frame":
                     with device.lock:

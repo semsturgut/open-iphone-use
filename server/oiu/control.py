@@ -8,6 +8,8 @@ from pathlib import Path
 import threading
 import time
 import uuid
+import logging
+from statistics import median
 
 from .hid import mouse, keyboard, chord, stroke, fraction
 from .core import CAPTURE_FPS
@@ -15,12 +17,14 @@ from . import vision
 from . import calibration as mapping
 
 
-VERIFY_BUDGET = 2.0
+VERIFY_BUDGET = 2.5
 CALIBRATION_BUDGET = 55.0
 # Good observed fits were .0042–.0056; .01 allows roughly twice that error.
 GOOD_FIT_RMS = .01
 # Three times the tap tolerance and the maximum residual accepted by fit().
 SUSPECT_MISS = .03
+BIAS_MISS = .012
+log = logging.getLogger(__name__)
 
 
 class ObservationUnavailable(ValueError):
@@ -37,6 +41,20 @@ def atomic_json(path, value):
     with os.fdopen(fd, 'w') as file: json.dump(value, file)
     os.replace(temporary, path)
 
+
+def tap_geometry(value):
+    # Capture pages can only contribute bounded numeric geometry, never arbitrary log text.
+    if not isinstance(value, dict): return None
+    result = {}
+    for name, keys in (('client', ('x','y')), ('board', ('left','top','width','height')),
+                       ('visualViewport', ('offsetLeft','offsetTop','width','height','scale'))):
+        item = value.get(name)
+        if not isinstance(item, dict):
+            result[name] = None
+            continue
+        result[name] = {key: item[key] for key in keys if type(item.get(key)) in (int,float)
+                        and math.isfinite(item[key]) and abs(item[key]) <= 100000}
+    return result
 
 class Pairing:
     def __init__(self, radio):
@@ -74,8 +92,12 @@ class Control:
         self.board_open, self.board_epoch, self.pair_epoch = False, 1, ''
         self.taps = deque(maxlen=64)
         self.hover = None
+        self.frame_intervals = deque(maxlen=20)
+        self.landing_errors = deque(maxlen=8)
+        self.observation_frames = 0
         self.generation, self.sending_generation = 0, 0
         self.units = (0,0)
+        self.motion_at = 0
         self.error = None
         self.closed = False
         self.calibration_deadline = None
@@ -107,7 +129,9 @@ class Control:
     def ingest(self, jpeg):
         with self.condition:
             if self.closed: raise ValueError('Device removed or control closed')
-            self.jpeg, self.at, self.frame_id = jpeg, time.monotonic(), str(uuid.uuid4())
+            now = time.monotonic()
+            if self.at and now > self.at: self.frame_intervals.append(now-self.at)
+            self.jpeg, self.at, self.frame_id = jpeg, now, str(uuid.uuid4())
             self.condition.notify_all()
             return dict(frameID=self.frame_id, fps=CAPTURE_FPS, boardOpen=self.board_open,
                         boardEpoch=self.board_epoch, pairEpoch=self.pair_epoch)
@@ -164,19 +188,31 @@ class Control:
         previous=None
         stable_since=None
         reason='Pointer has not appeared'
+        self.observation_frames = 0
         while time.monotonic()<deadline:
-            try: stamp,jpeg=self.capture_after(after,max(.001,deadline-time.monotonic()))
-            except ValueError:
-                self.fresh()  # Cancellation/stale streams retain their own actionable error.
-                break
+            remaining=deadline-time.monotonic()
+            try: stamp,jpeg=self.capture_after(after,max(.001,min(.75,remaining)))
+            except ObservationUnavailable:
+                self.fresh()
+                if time.monotonic() >= deadline: break
+                # Background Safari can produce one frame per second or slower.
+                # Refresh the auto-hiding pointer while waiting for that frame.
+                self.wake_pointer(-1 if expected and expected[0] > .5 else 1)
+                after=self.motion_at
+                continue
             after=stamp
+            self.observation_frames += 1
             if aspect is not None:
                 pic=vision.image(jpeg)
                 if abs(pic.width/pic.height-aspect)>.03:
                     raise ValueError('Screen orientation changed; prepare the pointer again')
             try: point,rect=vision.pointer(jpeg,board_required=board_required,expected=expected,reference=reference)
             except ValueError as error:
-                previous=None; reason=str(error); continue
+                previous=None; reason=str(error)
+                if time.monotonic()-self.motion_at >= .75 and time.monotonic() < deadline:
+                    self.wake_pointer(-1 if expected and expected[0] > .5 else 1)
+                    after=self.motion_at
+                continue
             if expected is not None and math.dist(point,expected) > tolerance:
                 previous=None; reason='Pointer has not reached the commanded position'; continue
             if plausible is not None and not plausible(point,rect,jpeg):
@@ -186,7 +222,7 @@ class Control:
             elif stable_since is not None and stamp-stable_since>=.12:
                 return point,rect,stamp
             previous=point
-        raise ObservationUnavailable('Timed out waiting for one stable grey AssistiveTouch pointer in two fresh frames; no click was sent. '+reason)
+        raise ObservationUnavailable('Timed out waiting for one stable grey AssistiveTouch pointer in two fresh frames. '+reason)
 
     def wait_tap(self, pressed, point, rect, timeout=3):
         deadline=time.monotonic()+timeout
@@ -194,9 +230,11 @@ class Control:
         with self.condition:
             while time.monotonic()<deadline:
                 self.fresh()
-                for stamp,x,y in self.taps:
+                for stamp,x,y,geometry in self.taps:
                     actual=(rect[0]+x*rect[2],rect[1]+y*rect[3])
-                    if stamp>=pressed and math.dist(actual,point)<=.06: return actual
+                    if stamp>=pressed and math.dist(actual,point)<=.06:
+                        self.last_tap_diagnostic = dict(event_fraction=[x,y], mapped_event=list(actual), board_rect=list(rect), dom=geometry, event_minus_pointer=[actual[i]-point[i] for i in (0,1)])
+                        return actual
                 self.condition.wait(min(.1,max(.001,deadline-time.monotonic())))
         raise ValueError('Safari did not return matching calibration tap feedback within 3 seconds; no coordinate mapping was saved')
 
@@ -237,11 +275,12 @@ class Control:
         return (*observation[:2],pressed) if observation else None
 
     def click_current(self, button='left'):
-        # Locate the pointer only to report where the click lands; screen sharing
-        # lags and video apps hide the pointer, so never refuse a click here.
         point=None
-        try: point,_,_=self.wait_pointer(time.monotonic(),board_required=False,timeout=1)
-        except ValueError: pass
+        self.wake_pointer()
+        try: point,_,_=self.wait_pointer(self.motion_at,board_required=False,timeout=self.observation_budget())
+        except ObservationUnavailable:
+            if not self.calibration or not self.trusted_calibration(self.calibration):
+                raise ValueError('Pointer is hidden and calibration is not trusted. Keep sharing visible and run ensure_session; no click was sent.')
         self.click(button)
         return point
 
@@ -290,6 +329,7 @@ class Control:
                 self.check_motion_state(aspect)
                 try:
                     samples=[]
+                    diagnostics=[]
 
                     def measure(ux,uy,target=None):
                         self.check_motion_state(aspect)
@@ -312,8 +352,14 @@ class Control:
                             except ObservationUnavailable:
                                 self.check_motion_state(aspect)
                                 if attempt: raise
+                                self.wake_pointer()
+                        self.last_tap_diagnostic = None
                         actual=self.wait_tap(pressed,point,visible)
-                        samples.append((ux,uy,*actual))
+                        diagnostic=self.last_tap_diagnostic or dict(event_fraction=None, mapped_event=list(actual), board_rect=list(visible), dom=None, event_minus_pointer=[actual[i]-point[i] for i in (0,1)])
+                        diagnostic.update(device_id=self.directory.name, units=[ux,uy], pointer=list(point))
+                        diagnostics.append(diagnostic)
+                        log.warning('calibration_sample %s', json.dumps(diagnostic, separators=(',',':')))
+                        samples.append((ux,uy,*point))
 
                     # Seed the scale, then measure all four board quadrants and its center.
                     measure(64,128)
@@ -330,6 +376,10 @@ class Control:
                         ux,uy=(round((target[a]-offsets[a])*spans[a]) for a in (0,1))
                         measure(ux,uy,target)
                     fitted=mapping.fit(samples,aspect)
+                    deltas=[d['event_minus_pointer'] for d in diagnostics]
+                    fitted['event_pointer_delta'] = dict(mean=[sum(d[i] for d in deltas)/len(deltas) for i in (0,1)], max_abs=[max(abs(d[i]) for d in deltas) for i in (0,1)], count=len(deltas))
+                    fitted['frame_size'] = list(vision.dimensions(self.jpeg))
+                    log.warning('calibration_summary %s', json.dumps(fitted['event_pointer_delta'], separators=(',',':')))
                 except ValueError as error:
                     self.check_motion_state(aspect)
                     retryable=any(word in str(error).lower() for word in ('inconsistent','clamped'))
@@ -350,6 +400,7 @@ class Control:
         else:
             candidate['suspect']=False
             self.calibration=candidate
+            self.landing_errors.clear()
             self.save()
         finally:
             self.calibration_deadline=None
@@ -378,50 +429,82 @@ class Control:
         if abs(pic.width/pic.height-aspect)>.03:
             raise ValueError('Screen orientation changed; prepare the pointer again')
 
+    def wake_pointer(self, direction=1):
+        # Net zero; move inward first when the target is near the right edge.
+        self.move(direction, 0)
+        self.move(-direction, 0)
+
+    def observation_budget(self, minimum=VERIFY_BUDGET):
+        recent = list(self.frame_intervals)[-5:]
+        cadence = max(median(recent), recent[-1]) if recent else 1/30
+        return min(3.2, max(minimum, cadence * 2.5 + .2))
+
+    def trusted_calibration(self, c):
+        return bool(c.get('version') == mapping.VERSION and c.get('motion') == mapping.MOTION
+                    and not c.get('suspect') and len(c.get('fit_rms', [])) == 2
+                    and max(c['fit_rms']) <= GOOD_FIT_RMS
+                    and c.get('frame_size') == list(vision.dimensions(self.jpeg)))
+
     def absolute(self,x,y,calibration=None,verify_budget=VERIFY_BUDGET):
-        """Open-loop calibrated move; visual verification is bounded and best-effort."""
         x,y=fraction(x),fraction(y)
         c=calibration or self.calibration
         if c is None or c.get('version')!=mapping.VERSION or c.get('motion')!=mapping.MOTION:
             raise ValueError('Pointer calibration is missing or incompatible; run ensure_session with Safari sharing visible to calibrate, then retry')
+        started=time.monotonic()
         self.check_motion_state(c['aspect'])
         ux,uy=round((x-c['offset_x'])*c['width']),round((y-c['offset_y'])*c['height'])
-        self.fresh()
-        self.verification_reason='pointer not observed'
-        self.first_landing_distance=None
         self.home()
-        deadline=time.monotonic()+verify_budget
-        try: _,reference=self.capture_after(time.monotonic(),timeout=max(.001,deadline-time.monotonic()))
-        except ObservationUnavailable: reference=None
+        self.wake_pointer()
+        # Reference has its own small budget. Post-move observation always gets its
+        # own budget, including on a throttled background Safari capture.
+        try: _,reference=self.capture_after(self.motion_at,timeout=min(.4,self.observation_budget()/3))
+        except ObservationUnavailable: reference=self.jpeg
         self.check_motion_state(c['aspect'])
         self.move(ux,uy)
-        point=None
+        moved_at=time.monotonic()
+        deadline=moved_at+self.observation_budget(verify_budget)
+        point=None; first=None; corrections=[]; frames=0
+        reason='pointer not observed'
         try:
-            point,_,_=self.wait_pointer(self.motion_at,expected=(x,y),
-                                        tolerance=.18,board_required=False,aspect=c['aspect'],
-                                        timeout=max(.001,deadline-time.monotonic()),reference=reference)
-            self.first_landing_distance=math.dist(point,(x,y))
+            point,_,_=self.wait_pointer(self.motion_at,expected=(x,y), tolerance=.18,
+                                       board_required=False,aspect=c['aspect'],
+                                       timeout=max(.001,deadline-time.monotonic()),reference=reference)
+            frames+=self.observation_frames
+            first=point
             for _ in range(2):
-                if math.dist(point,(x,y))<=mapping.TOLERANCE: break
-                if time.monotonic()>=deadline or math.dist(point,(x,y))>.18: break
+                if math.dist(point,(x,y))<=mapping.TOLERANCE or time.monotonic()>=deadline: break
                 dx,dy=round((x-point[0])*c['width']),round((y-point[1])*c['height'])
                 if dx==dy==0: break
+                corrections.append([dx,dy])
+                correction_reference=self.jpeg
                 self.move(dx,dy)
-                point=None  # A prior landing is not evidence about this correction.
-                point,_,_=self.wait_pointer(self.motion_at,expected=(x,y),
-                                        tolerance=.18,board_required=False,aspect=c['aspect'],
-                                            timeout=max(.001,deadline-time.monotonic()))
+                point=None
+                point,_,_=self.wait_pointer(self.motion_at,expected=(x,y),tolerance=.18,
+                                            board_required=False,aspect=c['aspect'],
+                                            timeout=max(.001,deadline-time.monotonic()), reference=correction_reference)
+                frames+=self.observation_frames
         except ObservationUnavailable as error:
-            self.verification_reason=str(error)
+            frames+=self.observation_frames
+            reason=str(error)
         else:
-            self.verification_reason='measured landing distance %.2f%% of screen' % (100*math.dist(point,(x,y)))
+            reason='measured landing distance %.2f%% of screen' % (100*math.dist(point,(x,y)))
         self.check_motion_state(c['aspect'])
         verified=bool(point and math.dist(point,(x,y))<=mapping.TOLERANCE)
-        if calibration is None and self.first_landing_distance is not None and self.first_landing_distance>SUSPECT_MISS:
-            if not c.get('suspect'):
+        if calibration is None and first is not None:
+            errors=(first[0]-x,first[1]-y)
+            self.landing_errors.append(errors)
+            bias=len(self.landing_errors)>=3 and any(abs(sum(e[i] for e in self.landing_errors)/len(self.landing_errors))>BIAS_MISS for i in (0,1))
+            if math.dist(first,(x,y))>SUSPECT_MISS or bias:
                 c['suspect']=True
                 self.save()
-        return point, verified
+        self.verification_reason=reason
+        self.first_landing_distance=math.dist(first,(x,y)) if first else None
+        self.observation = dict(target=[x,y], units=[ux,uy], first_landing=first, final_landing=point, click_sent=False,
+                                corrections=corrections, verified=verified, observation_reason=reason,
+                                landing_error=[point[0]-x,point[1]-y] if point else None,
+                                frames_seen=frames, timings=dict(total_seconds=round(time.monotonic()-started,3),
+                                observation_seconds=round(time.monotonic()-moved_at,3)))
+        return point,verified
 
     def stop_capture(self):
         self.generation+=1
@@ -460,7 +543,7 @@ class Control:
         if operation=='capture_tap':
             with self.condition:
                 if self.closed: raise ValueError('Device removed or control closed')
-                self.taps.append((time.monotonic(),fraction(args['x']),fraction(args['y'])))
+                self.taps.append((time.monotonic(),fraction(args['x']),fraction(args['y']),tap_geometry(args.get('geometry'))))
                 self.condition.notify_all()
             return dict(ok=True,message='Calibration feedback received')
         if operation=='capture_pointer':
@@ -481,6 +564,8 @@ class Control:
                         bluetooth_status='Bluetooth connected' if connected else "Bluetooth not connected — control won't work",
                         screen_share_status='Screen sharing live' if self.is_fresh() else "Screen sharing off — control won't work"),message=self.label)
         self.sending_generation=self.generation
+        if operation in ('pointer_tap','pointer_move'):
+            self.observation = dict(target=[args.get('x'),args.get('y')], units=None, first_landing=None, final_landing=None, corrections=[], verified=False, click_sent=False, observation_reason='move not completed', landing_error=None, frames_seen=0, timings={})
         try:
             self.fresh()
             self.pairing.associate(self)
@@ -505,7 +590,7 @@ class Control:
                 if type(dx) is not int or type(dy) is not int or max(abs(dx),abs(dy))>127: raise ValueError('Relative deltas must be -127…127')
                 self.move(dx,dy)
                 try: point,_,_=self.wait_pointer(self.motion_at,board_required=False,timeout=1)
-                except ValueError: point=None
+                except ObservationUnavailable: point=None
                 message='Pointer moved to (%.3f,%.3f)'%point if point else 'Pointer moved; the pointer was not visible to verify'
             elif operation=='click':
                 point=self.click_current(args.get('button','left'))
@@ -514,13 +599,18 @@ class Control:
                 point,verified=self.absolute(args['x'],args['y'])
                 target='(%s,%s)'%(args['x'],args['y'])
                 if operation=='pointer_tap':
+                    if not verified and (point is not None or not self.trusted_calibration(self.calibration)):
+                        raise ValueError('Pointer landing is unverified and calibration is not safe for a blind tap. Keep sharing visible, use the standard pointer and run ensure_session to recalibrate; no click was sent. '+self.verification_reason)
+                    self.observation['click_sent'] = None  # A failed transport may leave delivery uncertain.
                     self.click()
+                    self.observation['click_sent'] = True
                     if verified: message='Tapped at '+target+'; pointer position visually verified'
                     elif point is None: message='Tapped at '+target+' using calibration only; pointer was not visible to verify'
                     else: message='Tapped at '+target+'; pointer read (%.3f,%.3f) and was not within 1%% of the target'%point
                 elif verified: message='Pointer is at '+target+'; position visually verified'
                 elif point is None: message='Pointer moved using calibration only; the pointer was not visible to verify'
                 else: message='Pointer read (%.3f,%.3f) near the target; position not verified'%point
+                log.warning('pointer_action %s', json.dumps(dict(operation=operation, **self.observation), separators=(',',':')))
                 if self.calibration.get('suspect'):
                     message+='; calibration marked for automatic recalibration on next ensure_session'
             elif operation=='type_text':
@@ -557,7 +647,10 @@ class Control:
                 message='Dragged '+direction+(', always verify the next item in the returned frame' if operation=='advance_feed' else '')
             else: raise ValueError('Unknown control operation')
             ended=time.monotonic()
-            if operation!='set_page_board': self.wait_frame(ended)
+            if operation in ('swipe','advance_feed','scroll'):
+                time.sleep(.2)
+                self.wait_frame(time.monotonic())
+            elif operation!='set_page_board': self.wait_frame(ended)
             if operation in ('ensure_session','prepare_session','pointer_quick_probe'):
                 deadline=time.monotonic()+5
                 while time.monotonic()<deadline:
@@ -567,12 +660,22 @@ class Control:
             self.error=None
             with self.condition:
                 jpeg,frame_id,frame_at=self.jpeg,self.frame_id,self.at
-            return dict(ok=True,message=message or 'Input/preparation completed. Inspect the returned screen to verify the UI outcome.',inputEndedAt=ended,
+            result = dict(ok=True,message=message or 'Input/preparation completed. Inspect the returned screen to verify the UI outcome.',inputEndedAt=ended,
                         commandID=str(uuid.uuid4()),
                         frame=dict(frameID=frame_id,captureActive=self.is_fresh(),ageMilliseconds=int((time.monotonic()-frame_at)*1000),
-                                   mimeType='image/jpeg',base64=base64.b64encode(jpeg).decode()))
+                                   mimeType='image/jpeg',width=vision.dimensions(jpeg)[0],height=vision.dimensions(jpeg)[1],base64=base64.b64encode(jpeg).decode()))
+            if operation in ('pointer_tap','pointer_move'): result.update(self.observation)
+            if operation in ('swipe','advance_feed','scroll'):
+                result.update(settled=False, settle_hint='UI may still be animating; take a fresh screenshot before targeting.')
+            return result
         except (ValueError,OSError) as error:
             self.error=str(error)
             self.open_board(False)
             if self.peer: self.radio.release(self.peer)
-            return dict(ok=False,message=str(error))
+            result=dict(ok=False,message=str(error))
+            if operation in ('pointer_tap','pointer_move') and hasattr(self,'observation'):
+                result.update(self.observation)
+                if result.get('click_sent') is None: result['message'] += ' A click may have been sent; inspect the screen before retrying.'
+                elif result.get('click_sent'): result['message'] += ' A click was sent; inspect the screen before retrying.'
+                log.warning('pointer_action_failed %s', json.dumps(dict(operation=operation, **self.observation), separators=(',',':')))
+            return result

@@ -252,7 +252,13 @@
     fetch('/api/tap', {
       method: 'POST', cache: 'no-store', keepalive: true,
       headers: { 'Content-Type': 'application/json', 'X-Open-iPhone-Use-Token': token },
-      body: JSON.stringify({ x, y })
+      body: JSON.stringify({ x, y, geometry: {
+        client: {x: event.clientX, y: event.clientY},
+        board: {left: rect.left, top: rect.top, width: rect.width, height: rect.height},
+        visualViewport: window.visualViewport ? {offsetLeft: window.visualViewport.offsetLeft,
+          offsetTop: window.visualViewport.offsetTop, width: window.visualViewport.width,
+          height: window.visualViewport.height, scale: window.visualViewport.scale} : null
+      } })
     }).catch(() => {});
   }
 

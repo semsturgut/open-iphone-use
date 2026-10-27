@@ -30,6 +30,9 @@ def tools():
         if name in ACTIONS:
             props["expected_frame_id"] = {"type": "string", "description": "ID of a screenshot from this device after its last input completed, at most 120 seconds old. The frameID that an action's own result returns is valid for the next action, so a new get_latest_screenshot per action is not needed; a frame captured before the last input completed is rejected."}
             props.update({key: {"type": kind} for key, kind in PARAMETERS.get(name, {}).items()})
+        if name in ('pointer_tap', 'pointer_move'):
+            for axis in ('x', 'y'):
+                props[axis]['description'] = f'{axis} is a fraction of the FULL returned image: pixel coordinate divided by image width for x or image height for y; origin is top-left.'
         optional = {'expected_frame_id'} if name in PREPARATION else set()
         if name in ('ensure_session', 'prepare_session'): optional.add('return_app')
         result.append(dict(name=name, description=f"{name.replace('_', ' ')}. Choose a device explicitly; inspect each resulting screen. HID acceptance does not prove UI success.",
@@ -44,6 +47,10 @@ def tools():
             result[-1]['description'] += ' Uses bounded closed-loop corrections. A clearly off observed landing marks calibration for automatic recalibration on the next ensure_session; this action never opens Safari to recalibrate.'
         if name == 'get_latest_screenshot':
             result[-1]['description'] = 'Read the selected phone screenshot and frame age. For input use an ID captured after this device’s last input completed, at most 120 seconds old. Screen sharing must still be active (latest frame within five seconds).'
+        if name in ('get_latest_screenshot', *ACTIONS):
+            result[-1]['description'] += ' Returned frame metadata includes actual width and height in pixels. Coordinates use the full image: x=px/width, y=py/height, origin top-left.'
+        if name in ('swipe', 'advance_feed', 'scroll'):
+            result[-1]['description'] += ' The UI may still be animating; take a fresh screenshot before targeting.'
         if name == 'create_device':
             result[-1]['description'] = 'Create a phone bound to the explicitly selected Bluetooth HID peer from list_bluetooth_candidates. Returns its private capture_path; combine with setup capture_origin. Bluetooth must be connected before adding.'
         if name == 'list_bluetooth_candidates':
@@ -60,7 +67,7 @@ def handle(args, method, params):
         version = requested if requested in ("2024-11-05", "2025-03-26", "2025-06-18") else "2024-11-05"
         return dict(protocolVersion=version, capabilities={"tools": {}},
                     serverInfo={"name": "open-iphone-use-portable", "version": "0.1.0"},
-                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary; a frame captured before the last input completed is rejected. Screen sharing must remain active with a frame in the last five seconds. Red Bluetooth/screen sharing status means control will not work. Owner pairing/sharing/unlocking is required.")
+                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Returned images include actual pixel width and height. For coordinates use x=px/width and y=py/height over the full image, origin top-left. After swipe, advance_feed or scroll, take a fresh screenshot before targeting because UI may still be animating. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary; a frame captured before the last input completed is rejected. Screen sharing must remain active with a frame in the last five seconds. Red Bluetooth/screen sharing status means control will not work. Owner pairing/sharing/unlocking is required.")
     if method == "ping":
         return {}
     if method == "tools/list":

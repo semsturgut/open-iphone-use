@@ -88,7 +88,7 @@ class MotionRegressions(unittest.TestCase):
             def release(self,*args):pass
         engine=Control(Pairing(Radio()),Path(directory),peer='phone')
         engine.ingest(jpeg(board_image()))
-        engine.calibration={'width':600,'height':1000,'offset_x':0,'offset_y':0,'aspect':.6,'version':3,'motion':'vertical-horizontal-16units-8ms-home-each'}
+        engine.calibration={'width':600,'height':1000,'offset_x':0,'offset_y':0,'aspect':.6,'version':4,'motion':'vertical-horizontal-16units-8ms-home-each','frame_size':[600,1000],'fit_rms':[.001,.001]}
         return engine
 
     def test_failed_prepare_session_keeps_the_saved_calibration(self):
@@ -200,9 +200,9 @@ class MotionRegressions(unittest.TestCase):
             with patch.object(engine,'home',side_effect=lambda:setattr(engine,'motion_at',time.monotonic())),patch.object(engine,'capture_after',return_value=(time.monotonic(),engine.jpeg)),patch.object(engine,'move',side_effect=lambda *args,**kw:(setattr(engine,'motion_at',time.monotonic()),events.append(('move',args)))),patch.object(engine,'wait_pointer',side_effect=observations),patch.object(engine,'packet',side_effect=lambda r,p:events.append(('packet',p))),patch('oiu.control.time.sleep'):
                 engine.absolute(.25,.7)
                 engine.click(gated=True,expected=(.25,.7),board_required=False)
-            self.assertEqual(events[1],('move',(-5,53)))
-            self.assertEqual(events[2][0],'packet')
-            self.assertEqual(events[2][1][0],1)
+            self.assertEqual(events[3],('move',(-5,53)))
+            self.assertEqual(events[4][0],'packet')
+            self.assertEqual(events[4][1][0],1)
 
     def test_reported_four_hardware_misses_are_corrected_before_click(self):
         cases=[((.25,.25),(.253,.234)),((.75,.25),(.805,.282)),
@@ -216,12 +216,12 @@ class MotionRegressions(unittest.TestCase):
                 with patch.object(engine,'home',side_effect=lambda:setattr(engine,'motion_at',time.monotonic())),patch.object(engine,'capture_after',return_value=(time.monotonic(),engine.jpeg)),patch.object(engine,'move',side_effect=move),patch.object(engine,'wait_pointer',side_effect=seen),patch.object(engine,'packet') as packet:
                     self.assertEqual(engine.absolute(*target),(target,True))
                     packet.assert_not_called()  # No press while positioning/correcting.
-                self.assertEqual(moves[1],(round((target[0]-landed[0])*600),round((target[1]-landed[1])*1000)))
+                self.assertEqual(moves[3],(round((target[0]-landed[0])*600),round((target[1]-landed[1])*1000)))
 
     def test_current_pointer_click_reports_location_and_presses_despite_decoys(self):
         with tempfile.TemporaryDirectory() as directory:
             engine=self.engine(directory)
-            with patch.object(engine,'wait_pointer',return_value=((.5,.5),(0,0,1,1),1)),patch.object(engine,'packet') as packet:
+            with patch.object(engine,'wake_pointer'),patch.object(engine,'wait_pointer',return_value=((.5,.5),(0,0,1,1),1)),patch.object(engine,'packet') as packet:
                 point=engine.click_current()
             self.assertEqual(point,(.5,.5))
             self.assertEqual(packet.call_args_list[0][0][1],bytes([1,0,0,0]))
@@ -238,7 +238,7 @@ class MotionRegressions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory,patch('oiu.vision.pointer',side_effect=ValueError('No single grey pointer is visible on the shared screen; no click was sent')) as locate:
             engine=self.engine(directory)
             started=time.monotonic()
-            with patch.object(engine,'wait_pointer',side_effect=ObservationUnavailable('Timed out waiting for one stable grey AssistiveTouch pointer in two fresh frames; no click was sent')),patch.object(engine,'wait_frame'),patch('oiu.control.time.sleep'):
+            with patch.object(engine,'wait_pointer',side_effect=ObservationUnavailable('Timed out waiting for one stable grey AssistiveTouch pointer in two fresh frames')),patch.object(engine,'wait_frame'),patch('oiu.control.time.sleep'):
                 result=engine.request('pointer_tap',x=.5,y=.5)
             self.assertTrue(result['ok'],result)
             self.assertIn('using calibration only',result['message'])
@@ -298,8 +298,9 @@ class MotionRegressions(unittest.TestCase):
             seen=[((.52,.5),(0,0,1,1),1),((.515,.5),(0,0,1,1),2),((.515,.5),(0,0,1,1),3)]
             with patch.object(engine,'wait_pointer',side_effect=seen) as wait,patch.object(engine,'capture_after',return_value=(time.monotonic(),engine.jpeg)),patch.object(engine,'wait_frame'),patch('oiu.control.time.sleep'):
                 result=engine.request('pointer_tap',x=.5,y=.5)
-            self.assertTrue(result['ok'],result)
-            self.assertIn('pointer read (0.515,0.500)',result['message'])
+            self.assertFalse(result['ok'],result)
+            self.assertEqual(result['final_landing'],(.515,.5))
+            self.assertFalse(result['verified'])
             self.assertAlmostEqual(engine.first_landing_distance,.02)
             self.assertFalse(engine.calibration.get('suspect',False))
             self.assertFalse(engine.path.exists())
@@ -333,8 +334,9 @@ class MotionRegressions(unittest.TestCase):
             engine=self.engine(directory)
             with patch.object(engine,'wait_pointer',return_value=((.3,.3),(0,0,1,1),1)),patch.object(engine,'wait_frame'),patch('oiu.control.time.sleep'):
                 result=engine.request('pointer_tap',x=.4,y=.4)
-            self.assertTrue(result['ok'],result)
-            self.assertIn('pointer read (0.300,0.300)',result['message'])
+            self.assertFalse(result['ok'],result)
+            self.assertEqual(result['final_landing'],(.3,.3))
+            self.assertIn('no click was sent',result['message'])
 
     def test_old_motion_calibration_is_invalidated(self):
         with tempfile.TemporaryDirectory() as directory:

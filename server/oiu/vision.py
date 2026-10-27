@@ -4,6 +4,10 @@ import math
 from PIL import Image, ImageChops, ImageFilter
 
 
+def dimensions(jpeg):
+    with Image.open(BytesIO(jpeg)) as source:
+        return source.size
+
 def image(jpeg):
     with Image.open(BytesIO(jpeg)) as source:
         if source.width * source.height > 20_000_000: raise ValueError('Capture exceeds 20 megapixels')
@@ -39,7 +43,7 @@ def board(jpeg):
                               ImageChops.multiply(r.point(lambda v: 255 if v < 80 else 0), b.point(lambda v: 255 if v < 180 else 0)))
     objects=components(mask)
     rectangles=[box for _,box in objects if box[2]-box[0]>=pic.width*.6 and box[3]-box[1]>=pic.height*.35]
-    if len(rectangles)>1: raise ValueError('More than one possible calibration board; no click was sent')
+    if len(rectangles)>1: raise ValueError('More than one possible calibration board')
     rect=rectangles[0] if rectangles else None
     if not rect: raise ValueError('Calibration board is closed or not visible: status dots and charging battery icons are not the board. Open the green-bordered white Safari board and keep sharing')
     x0, y0, x1, y1 = rect
@@ -52,7 +56,7 @@ def board(jpeg):
         if sum(edge.histogram()[1:]) < max(edge.size)*.3: raise ValueError('Calibration border is incomplete')
     interior = pic.crop((x0+5, y0+5, x1-5, y1-5)).convert('L')
     if sum(interior.histogram()[210:]) < interior.width*interior.height*.65:
-        raise ValueError('Calibration board is covered; no click was sent')
+        raise ValueError('Calibration board is covered')
     return pic, (x0/w, y0/h, (x1-x0)/w, (y1-y0)/h)
 
 
@@ -77,12 +81,12 @@ def pointer(jpeg, board_required=True, expected=None, radius=.18, reference=None
     if expected is not None:
         left=max(left,int((expected[0]-radius)*w));right=min(right,int((expected[0]+radius)*w)+1)
         top=max(top,int((expected[1]-radius)*h));bottom=min(bottom,int((expected[1]+radius)*h)+1)
-    if right<=left or bottom<=top: raise ValueError('Pointer target is outside the observable screen area; no click was sent')
+    if right<=left or bottom<=top: raise ValueError('Pointer target is outside the observable screen area')
     pixels=pic.crop((left,top,right,bottom))
     difference=None
     if reference is not None:
         prior=image(reference)
-        if prior.size != pic.size: raise ValueError('Screen geometry changed while locating the pointer; no click was sent')
+        if prior.size != pic.size: raise ValueError('Screen geometry changed while locating the pointer')
         delta=ImageChops.difference(pic,prior).convert('L')
         difference=delta.point(lambda value: 255 if value>=12 else 0)
     # A translucent grey circle inherits color from the app below it. Narrow luminance
@@ -104,5 +108,5 @@ def pointer(jpeg, board_required=True, expected=None, radius=.18, reference=None
                     if changed.histogram()[255] < changed.width*changed.height*.2: continue
                 if not any(math.dist(point,old)<.006 for old in candidates): candidates.append(point)
     if len(candidates)!=1:
-        raise ValueError('No single grey pointer is visible '+('inside the board' if on_board else 'on the shared screen')+'; no click was sent. Use the standard grey AssistiveTouch pointer, keep it visible and leave pointer size/Zoom unchanged')
+        raise ValueError('No single grey pointer is visible '+('inside the board' if on_board else 'on the shared screen')+'. Use the standard grey AssistiveTouch pointer, keep it visible and leave pointer size/Zoom unchanged')
     return candidates[0],rect

@@ -12,12 +12,15 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from PIL import Image
 
 from oiu.core import Device, Registry, FRAME_HISTORY_LIMIT, FRAME_MAX_AGE
 from oiu.http import Server
 from oiu.mcp import tools, handle
 
-JPEG = b'\xff\xd8\xfftest'
+_image = io.BytesIO()
+Image.new('RGB',(9,19),'white').save(_image,format='JPEG')
+JPEG = _image.getvalue()
 
 
 class CaptureRateTests(unittest.TestCase):
@@ -435,6 +438,7 @@ class ServerTests(unittest.TestCase):
         snapshot = self.api(f'/api/devices/{self.a.id}/snapshot')
         self.assertEqual(snapshot['frame']['frameID'], self.a.frame_id)
         self.assertEqual(base64.b64decode(snapshot['frame']['base64']), JPEG)
+        self.assertEqual((snapshot['frame']['width'], snapshot['frame']['height']), (9,19))
         device = self.registry.create('No HID')
         device.upload(JPEG)
         result = device.action('click', {'expectedFrameID': device.frame_id})
@@ -496,10 +500,12 @@ class ServerTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error: self.api('/api/bluetooth',token=self.a.token)
             self.assertEqual(error.exception.code,403)
         finally: self.server.operator=True
-        for body in ({'name':'arbitrary'}, {'bt_id':'missing'}, {'bt_id':'bt-a'}):
+        for body in ({'name':'arbitrary'}, {'bt_id':'missing'}):
             with self.assertRaises(HTTPError) as error:
                 self.api('/api/devices',json.dumps(body).encode())
             self.assertEqual(error.exception.code,400)
+        reused = self.api('/api/devices',b'{"bt_id":"bt-a"}')
+        self.assertEqual(reused['device_id'],self.a.id)
         self.registry.radio.items[2]['reports']=[1]
         with self.assertRaises(HTTPError): self.api('/api/devices',b'{"bt_id":"bt-c"}')
         self.registry.radio.items[2]['reports']=[1,2]

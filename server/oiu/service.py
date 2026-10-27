@@ -7,6 +7,7 @@ import sys
 import time
 import uuid
 from .permissions import secure_directory
+from .state import StateLease
 
 
 def daemon(args, argv, call):
@@ -45,7 +46,17 @@ def stop(args, call):
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         try:
-            if call(args, '/api/health').get('instance_id') != identity: return result
-        except (OSError, ValueError): return result
-        time.sleep(.1)
+            if call(args, '/api/health').get('instance_id') == identity:
+                time.sleep(.1)
+                continue
+        except (OSError, ValueError): pass
+        # Listener shutdown precedes registry/radio cleanup. Do not report a
+        # completed stop until the old server has released its state lease.
+        try:
+            lease = StateLease(args.state)
+        except ValueError:
+            time.sleep(.1)
+            continue
+        lease.close()
+        return result
     raise ValueError('Shutdown requested but server has not stopped yet')

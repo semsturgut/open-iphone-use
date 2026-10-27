@@ -48,6 +48,7 @@ class MacBackend:
         self.path = str(self.directory / "bridge.sock")
         if len(self.path.encode()) > 100:
             raise ValueError("Native socket path too long; use a shorter --state directory")
+        self.wait_for_previous_helper()
         env = dict(os.environ, OIU_HEADLESS="1", OIU_SUPPORT_DIRECTORY=str(self.directory),
                    OIU_DEVICE_NAMESPACE=device_id, OIU_DEVICE_NAME="OIU " + device_id[:8])
         env.pop("OIU_EXPECTED_CENTRAL", None)
@@ -68,6 +69,23 @@ class MacBackend:
             time.sleep(.05)
         self.close()
         raise RuntimeError("Native headless helper did not start")
+
+    def wait_for_previous_helper(self):
+        # A crashed parent releases the state lease before its child detects
+        # reparenting. Never unlink its live socket and overlap two peripherals.
+        deadline = time.monotonic() + 5
+        while Path(self.path).exists():
+            try:
+                identity = self.request('headless_identity')
+            except (ConnectionRefusedError, FileNotFoundError):
+                return  # Stale socket: the broker will replace it.
+            except (OSError, ValueError) as error:
+                raise RuntimeError('Existing native helper could not be checked; refusing to overlap it') from error
+            if not identity.get('ok') or not identity.get('message'):
+                raise RuntimeError('Unexpected native helper on the existing socket')
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Previous native helper is still running; retry after it exits')
+            time.sleep(.1)
 
     def request(self, operation, **arguments):
         payload = dict(arguments, operation=operation, deviceID="iphone", requestID=os.urandom(16).hex())
@@ -110,7 +128,7 @@ class MacRadio:
         self.bridge = MacBackend(executable, directory, 'shared-radio', radio=True)
         deadline=time.monotonic()+4
         self.startup=self.invoke('radio_status')
-        while self.startup['state'] in ('starting','publishing') and time.monotonic()<deadline:
+        while self.startup['state'] in ('starting','publishing','waitingForBluetooth','resetting','bluetoothOff') and time.monotonic()<deadline:
             time.sleep(.05)
             self.startup=self.invoke('radio_status')
 
