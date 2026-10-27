@@ -1,9 +1,9 @@
 name: Mac bridge
 on:
   push:
-    paths: ['macos/**', 'server/**', 'setup.sh', 'setup.ps1', '.github/workflows/macos.yml']
+    paths: ['macos/**', 'server/**', 'setup.sh', 'setup.ps1', 'install.sh', '.github/workflows/macos.yml']
   pull_request:
-    paths: ['macos/**', 'server/**', 'setup.sh', 'setup.ps1', '.github/workflows/macos.yml']
+    paths: ['macos/**', 'server/**', 'setup.sh', 'setup.ps1', 'install.sh', '.github/workflows/macos.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -34,3 +34,18 @@ jobs:
         run: |
           "$RUNNER_TEMP/oiu-runtime/venv/bin/python" -m pip install 'dbus-fast>=5.2,<6'
           PYTHONPATH=../server "$RUNNER_TEMP/oiu-runtime/venv/bin/python" -m unittest discover -s ../server/tests -v
+      - name: Install and uninstall from local archives
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eu
+          export HOME="$RUNNER_TEMP/oiu-install-home"
+          export OIU_INSTALL_ROOT="$HOME/runtime" OIU_BIN_DIR="$HOME/bin"
+          mkdir -p "$HOME" "$HOME/assets"
+          git archive --format=tar.gz --prefix=source/ HEAD -o "$HOME/assets/source.tar.gz"
+          tar -czf "$HOME/assets/helper.tar.gz" -C "$RUNNER_TEMP/oiu-runtime/venv/bin" open-iphone-use-headless
+          shasum -a 256 "$HOME/assets/helper.tar.gz" > "$HOME/assets/helper.tar.gz.sha256"
+          export OIU_ARCHIVE_URL="file://$HOME/assets/source.tar.gz" OIU_HELPER_URL="file://$HOME/assets/helper.tar.gz"
+          bash install.sh --version vTEST --no-agents
+          "$OIU_BIN_DIR/open-iphone-use" --help
+          bash install.sh --uninstall
+          test ! -e "$OIU_INSTALL_ROOT"

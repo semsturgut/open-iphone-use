@@ -1,0 +1,42 @@
+name: Release assets
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (draft or published)
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  assets:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 0
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.2'
+      - name: Build and upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -eu
+          case "$RELEASE_TAG" in *[!a-zA-Z0-9._-]*|'') echo 'Invalid release tag' >&2; exit 1;; esac
+          swift build --package-path macos -c release --arch arm64 --arch x86_64 --product open-iphone-use-headless
+          BIN=$(swift build --package-path macos -c release --arch arm64 --arch x86_64 --show-bin-path)
+          mkdir "$RUNNER_TEMP/release-assets"
+          cp "$BIN/open-iphone-use-headless" "$RUNNER_TEMP/release-assets/"
+          codesign -s - -f "$RUNNER_TEMP/release-assets/open-iphone-use-headless"
+          lipo -verify_arch arm64 x86_64 "$RUNNER_TEMP/release-assets/open-iphone-use-headless"
+          cd "$RUNNER_TEMP/release-assets"
+          tar -czf open-iphone-use-headless-macos-universal.tar.gz open-iphone-use-headless
+          shasum -a 256 open-iphone-use-headless-macos-universal.tar.gz > open-iphone-use-headless-macos-universal.tar.gz.sha256
+          git -C "$GITHUB_WORKSPACE" archive --format=tar.gz --prefix="open-iphone-use-$RELEASE_TAG/" "$RELEASE_TAG" -o "$PWD/open-iphone-use-$RELEASE_TAG.tar.gz"
+          shasum -a 256 "open-iphone-use-$RELEASE_TAG.tar.gz" > "open-iphone-use-$RELEASE_TAG.tar.gz.sha256"
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" open-iphone-use-headless-macos-universal.tar.gz* "open-iphone-use-$RELEASE_TAG.tar.gz" "open-iphone-use-$RELEASE_TAG.tar.gz.sha256" --clobber

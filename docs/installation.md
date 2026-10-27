@@ -1,19 +1,27 @@
 # CLI installation and removal
 
-`setup.sh` supports macOS and Linux; `setup.ps1` supports Windows. Run the script from
-a reviewed checkout. Remote `main` installers install the source on `main`, which may differ
-from your checkout. A downloaded installer can use `OIU_REF` to select an
-archive ref or `OIU_SOURCE_DIR` to use an already reviewed checkout.
-
 The macOS app and DMG are deprecated and removed; use the CLI. Windows and Linux backends
 have not been tested on real hardware; reports and pull requests are welcome.
 
 ## macOS / Linux
 
 ```sh
-sh setup.sh
+curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --version v0.0.3
 ~/.local/bin/open-iphone-use serve
+curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --uninstall
 ```
+
+The one-liner works once `install.sh` is on `main`; the prebuilt helper requires a release
+with assets. The default is the latest published release, or `main` if none exists. A ref
+can be a release tag or branch. `--dry-run` prints the plan without writing files;
+`--no-agents` skips registration. `OIU_REPO`, `OIU_ARCHIVE_URL` and `OIU_HELPER_URL`
+select a repository or full archive URLs; helper checksums are fetched from the helper URL
+with `.sha256` appended. `--verify-downloads` downloads and verifies into a temporary
+directory without installing. Use `file://` URLs for local archives.
+
+For development, clone the repository and run `sh setup.sh` from the checkout. The checkout
+setup also accepts `OIU_SOURCE_DIR` and `OIU_REF` for an alternate source.
 
 The managed runtime is `~/.local/share/open-iphone-use/runtime`, the launcher is
 `~/.local/bin/open-iphone-use`, and device credentials/CA/calibration stay separately in
@@ -23,8 +31,11 @@ restored on uninstall; unrelated occupied CLI paths are refused.
 
 Setup uses Python 3.11+ if present. Otherwise it bootstraps Astral's official `uv` installer
 in the managed runtime and installs a private CPython 3.12, without changing the system
-Python. Dependencies come from PyPI. On macOS it builds `open-iphone-use-headless` from
-source using Swift 6; installing Xcode/accepting its license remains an owner action. On
+Python. Dependencies come from PyPI. On macOS the installer checks the prebuilt helper checksum and
+architecture. The helper is ad-hoc signed, not notarized. If no usable prebuilt exists, setup
+builds it with Swift 6 and Xcode Command Line Tools; installing these and accepting any license
+remain owner actions. macOS may ask for Bluetooth permission for the terminal or app that
+launches the server. On
 Linux it installs missing BlueZ/D-Bus using apt, dnf or pacman with sudo, and starts the
 Bluetooth service where systemd is available. OS package-manager permissions may prompt.
 Unsupported distributions receive an explicit dependency instruction. Run the server as
@@ -49,8 +60,9 @@ it does not change OS Bluetooth permissions or the outer sandbox.
 ## Windows
 
 ```powershell
-.\setup.ps1
+irm https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/setup.ps1 | iex
 open-iphone-use serve
+# For uninstall, download setup.ps1 and run:
 .\setup.ps1 -Uninstall
 ```
 
@@ -120,3 +132,10 @@ Use `serve --foreground` to debug Bluetooth permissions and `stop` to shut down.
 AssistiveTouch, use `new` (or select a Bluetooth peer in the UI), scan that phone's QR,
 then approve Safari sharing. `devices`, `status --device`, `link` and `remove` work without
 a host browser. Distribution builds use these setup scripts and the CLI only.
+
+## Release assets
+
+Create the GitHub release as a draft first, then run the Release assets workflow manually
+with its tag to build and upload assets before publishing. Publishing also triggers the
+workflow. Assets include the universal ad-hoc-signed helper and a source archive, each
+with a SHA-256 file. Release creation and publication are separate owner actions.

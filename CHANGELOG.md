@@ -1,7 +1,9 @@
 # Changelog
 
-## 0.0.3 — CLI-first multi-iPhone release (2026-10-27)
+## 0.0.3 — CLI-first multi-iPhone release (unreleased)
 
+- Add a curl installer with verified prebuilt macOS helper, source fallback, offline uninstall,
+  and release asset workflow.
 - Target 30 fps Safari capture; actual frame delivery depends on the phone and network.
 - Fit seven calibration samples on the visual pointer, accept a good fit without a held-out
   step, and remeasure a poor fit. Support the default auto-hiding AssistiveTouch pointer.
@@ -39,7 +41,7 @@
   protected by each device's capture token.
 - Render width-aware, black-on-white terminal QR codes using Unicode half-blocks.
 - Remove DMG/application packaging, desktop installers, release references and artifacts;
-  installation/builds use setup.sh/setup.ps1 and the CLI.
+  installation/builds use install.sh, setup.sh/setup.ps1 and the CLI.
 - Show live Bluetooth and Screen share lights and matching CLI/MCP status messages.
 
 ## 0.0.2 — experimental alpha

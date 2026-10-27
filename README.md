@@ -10,26 +10,36 @@ compatibility test surface.
 
 ## Quick start
 
-From a reviewed checkout on macOS or Linux:
+On macOS or Linux, install the latest published release (or choose a ref):
 
 ```sh
-sh setup.sh
+curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --version v0.0.3
 open-iphone-use serve
+# Uninstall the managed runtime and unchanged agent entries:
+curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --uninstall
 ```
 
-On Windows:
+These commands become available when `install.sh` reaches `main`; the prebuilt helper
+requires a release with assets. The macOS helper is ad-hoc signed, not notarized. When no
+prebuilt helper is available, setup builds it with Swift 6 and Xcode Command Line Tools.
+macOS may ask for Bluetooth permission for the terminal or app launching the server.
+Linux hardware support is untested.
+
+On Windows, use PowerShell:
 
 ```powershell
-.\setup.ps1
+irm https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/setup.ps1 | iex
 open-iphone-use serve
 ```
 
-Setup installs a managed runtime and the `open-iphone-use` CLI. It registers MCP for detected
-Codex, Claude Code, Cursor, OpenCode and Command Code clients, and installs the agent skill
-at `~/.agents/skills/open-iphone-use`; detected Claude Code and Command Code clients get
-aliases to it (Windows can use a junction or copy fallback). Restart clients after setup.
-Run `open-iphone-use register-agents` to register clients installed later. macOS needs Swift 6;
-see [installation](docs/installation.md) for platform dependencies and options.
+For development, clone the repository and run `sh setup.sh` (Windows: `.\setup.ps1`)
+from the checkout. Setup installs a managed runtime and the `open-iphone-use` CLI. It
+registers MCP for detected Codex, Claude Code, Cursor, OpenCode and Command Code clients,
+and installs the agent skill at `~/.agents/skills/open-iphone-use`; detected Claude Code
+and Command Code clients get aliases. Restart clients after setup. Run
+`open-iphone-use register-agents` for clients installed later. See
+[installation](docs/installation.md) for platform dependencies and options.
 
 `serve` runs headless in the background; use `open-iphone-use serve --foreground` for
 debugging and `open-iphone-use stop` to stop it. It is not a login or reboot service.
