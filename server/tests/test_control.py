@@ -325,7 +325,8 @@ class ControlTests(unittest.TestCase):
             self.assertTrue(second['ok'], second)
             self.assertTrue(first.is_alive(), 'Phone B must complete while phone A is blocked')
         finally:
-            resume.set(); first.join(20)
+            resume.set(); first.join(120)
+        self.assertFalse(first.is_alive(), 'Phone A preparation did not finish')
         self.assertTrue(result[0]['ok'], result)
         self.assertEqual(self.engine.peer, 'phone-a')
         self.assertEqual(other.peer, 'phone-b')
