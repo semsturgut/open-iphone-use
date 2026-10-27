@@ -33,7 +33,7 @@ jobs:
           mkdir "$RUNNER_TEMP/release-assets"
           cp "$BIN/open-iphone-use-headless" "$RUNNER_TEMP/release-assets/"
           codesign -s - -f "$RUNNER_TEMP/release-assets/open-iphone-use-headless"
-          lipo -verify_arch arm64 x86_64 "$RUNNER_TEMP/release-assets/open-iphone-use-headless"
+          lipo "$RUNNER_TEMP/release-assets/open-iphone-use-headless" -verify_arch arm64 x86_64
           cd "$RUNNER_TEMP/release-assets"
           tar -czf open-iphone-use-headless-macos-universal.tar.gz open-iphone-use-headless
           shasum -a 256 open-iphone-use-headless-macos-universal.tar.gz > open-iphone-use-headless-macos-universal.tar.gz.sha256
