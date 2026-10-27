@@ -152,6 +152,17 @@ class ServerTests(unittest.TestCase):
         for tool in map(lambda name: next(t for t in tools() if t['name'] == name), ('ensure_session', 'prepare_session')):
             self.assertEqual(tool['inputSchema']['properties']['return_app']['type'], 'string')
             self.assertNotIn('return_app', tool['inputSchema']['required'])
+            self.assertEqual(tool['inputSchema']['properties']['recalibrate']['type'], 'boolean')
+            self.assertNotIn('recalibrate', tool['inputSchema']['required'])
+            self.assertIn('recalibrate=true',tool['description'])
+
+    def test_safari_force_requests_explicit_recalibration(self):
+        self.a.upload(JPEG)
+        result=self.api('/api/calibrate',json.dumps({'force':True}).encode(),capture=True)
+        self.assertTrue(result['ok'])
+        operation,arguments=self.a.backend.calls[-1]
+        self.assertEqual(operation,'prepare_session')
+        self.assertIs(arguments['recalibrate'],True)
 
     def test_frame_after_completion_and_device_independence(self):
         self.a.upload(JPEG); self.b.upload(JPEG)

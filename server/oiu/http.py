@@ -172,7 +172,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(device.backend.request("capture_tap", x=x, y=y, geometry=data.get("geometry")))
                 data = json.loads(body or b'{}')
                 if data.get('force') is True:
-                    return self.reply(device.action('prepare_session', {'expectedFrameID': device.frame_id}))
+                    return self.reply(device.action('prepare_session', {'expectedFrameID': device.frame_id, 'recalibrate': True}))
                 # Share-start readiness is read-only; the first operator tap prepares input.
                 return self.reply({"ok": False, "message": "Sharing active. Tap the screen in the operator grid to prepare and control this phone."})
             self.admin()

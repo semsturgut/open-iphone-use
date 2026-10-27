@@ -262,7 +262,7 @@ class MotionRegressions(unittest.TestCase):
                 if engine.debug_thread: engine.debug_thread.join(5)
                 self.assertEqual(result['ok'],operation=='pointer_move',result)
                 if operation=='pointer_tap': self.assertFalse(result['click_sent'])
-                else: self.assertIn('calibration marked for automatic recalibration on next ensure_session',result['message'])
+                else: self.assertIn('calibration remains suspect',result['message'])
                 self.assertAlmostEqual(engine.first_landing_distance,.04)
                 self.assertTrue(json.loads(engine.path.read_text())['calibration']['suspect'])
                 if operation=='pointer_tap': self.assertIn('no click was sent',engine.label)
@@ -284,6 +284,8 @@ class MotionRegressions(unittest.TestCase):
                         spotlight.assert_called_once_with('TikTok')
                     self.assertFalse(restored.calibration['suspect'])
                     self.assertFalse(json.loads(restored.path.read_text())['calibration']['suspect'])
+                    self.assertNotIn('suspect_recalibration_attempted',restored.calibration)
+                    self.assertNotIn('suspect_recalibration_at',restored.calibration)
                     with patch.object(restored,'calibrate') as calibrate:
                         restored.ready()
                         calibrate.assert_not_called()
@@ -320,9 +322,46 @@ class MotionRegressions(unittest.TestCase):
             engine.calibration['suspect']=True;engine.save()
             with patch.object(engine,'calibrate',side_effect=ValueError('failed')) as calibrate:
                 with self.assertRaisesRegex(ValueError,'failed'):engine.ready()
-                with self.assertRaisesRegex(ValueError,'already attempted'):engine.ready()
+                with self.assertRaisesRegex(ValueError,'ensure_session with recalibrate=true'):engine.ready()
                 calibrate.assert_called_once()
             self.assertTrue(json.loads(engine.path.read_text())['calibration']['suspect_recalibration_attempted'])
+
+    def test_explicit_recalibration_recovers_and_failure_preserves_mapping(self):
+        for operation in ('ensure_session', 'prepare_session'):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                engine=self.engine(directory)
+                engine.calibration.update(suspect=True, suspect_recalibration_attempted=True, suspect_recalibration_at=time.time())
+                engine.save(); old=dict(engine.calibration)
+                def failed():
+                    self.assertNotIn('suspect',engine.calibration)
+                    self.assertNotIn('suspect_recalibration_attempted',engine.calibration)
+                    raise ValueError('failed')
+                with patch.object(engine,'calibrate',side_effect=failed):
+                    result=engine.request(operation,recalibrate=True)
+                self.assertFalse(result['ok']); self.assertEqual(engine.calibration,old)
+                self.assertEqual(json.loads(engine.path.read_text())['calibration'],old)
+                from test_control import ControlTests
+                fixture=ControlTests(); fixture.engine=engine
+                with ExitStack() as scope:
+                    fixture.calibration_fakes(scope)
+                    with patch.object(engine,'wait_frame'),patch('oiu.vision.board',side_effect=ValueError('board closed')):
+                        result=engine.request(operation,recalibrate=True)
+                    self.assertTrue(result['ok'],result)
+                self.assertFalse(engine.calibration['suspect'])
+                self.assertNotIn('suspect_recalibration_attempted',engine.calibration)
+                self.assertNotIn('suspect_recalibration_at',engine.calibration)
+
+    def test_automatic_recalibration_retries_after_timeout_and_legacy_flag(self):
+        from oiu.control import RECALIBRATION_RETRY_SECONDS
+        for attempted_at in (time.time()-RECALIBRATION_RETRY_SECONDS-1, None):
+            with self.subTest(attempted_at=attempted_at), tempfile.TemporaryDirectory() as directory:
+                engine=self.engine(directory)
+                engine.calibration.update(suspect=True,suspect_recalibration_attempted=True)
+                if attempted_at is not None: engine.calibration['suspect_recalibration_at']=attempted_at
+                with patch.object(engine,'calibrate',side_effect=ValueError('failed')) as calibrate:
+                    with self.assertRaisesRegex(ValueError,'failed'): engine.ready()
+                calibrate.assert_called_once()
+                self.assertGreater(json.loads(engine.path.read_text())['calibration']['suspect_recalibration_at'],time.time()-5)
 
     def test_pointer_tap_reports_visual_verification_when_the_pointer_is_found(self):
         with tempfile.TemporaryDirectory() as directory:

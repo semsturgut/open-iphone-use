@@ -23,6 +23,7 @@ CALIBRATION_BUDGET = 55.0
 GOOD_FIT_RMS = .01
 # Three times the tap tolerance and the maximum residual accepted by fit().
 SUSPECT_MISS = .03
+RECALIBRATION_RETRY_SECONDS = 180
 log = logging.getLogger(__name__)
 
 
@@ -306,7 +307,7 @@ class Control:
         try: point,_,_=self.wait_pointer(self.motion_at,board_required=False,timeout=self.observation_budget())
         except ObservationUnavailable:
             if not self.calibration or not self.trusted_calibration(self.calibration):
-                raise ValueError('Pointer is hidden and calibration is not trusted. Keep sharing visible and run ensure_session; no click was sent.')
+                raise ValueError('Pointer is hidden and calibration is not trusted. Keep sharing visible and run ensure_session with recalibrate=true; no click was sent.')
         self.click(button)
         return point
 
@@ -425,25 +426,46 @@ class Control:
             raise ValueError('Calibration failed; the stored mapping is untouched. Keep Safari sharing visible, use the standard grey AssistiveTouch pointer, keep tracking speed/Zoom fixed, and prepare again. '+str(error)) from error
         else:
             candidate['suspect']=False
+            candidate.pop('suspect_recalibration_attempted', None)
+            candidate.pop('suspect_recalibration_at', None)
+            previous=self.calibration
             self.calibration=candidate
-            self.save()
+            try: self.save()
+            except Exception:
+                self.calibration=previous
+                raise
         finally:
             self.calibration_deadline=None
             self.open_board(False)
 
-    def ready(self):
+    def ready(self, recalibrate=False):
         self.peer=self.pairing.associate(self)
-        if self.calibration:
+        compatible=False
+        if self.calibration and not recalibrate:
             pic=vision.image(self.jpeg)
-            if self.calibration.get('version')!=mapping.VERSION or self.calibration.get('motion')!=mapping.MOTION or abs(pic.width/pic.height-self.calibration['aspect'])>.03:
-                self.calibration=None
-        if self.calibration and self.calibration.get('suspect'):
-            if self.calibration.get('suspect_recalibration_attempted'):
-                raise ValueError('Automatic recalibration already attempted; keep Safari sharing visible and explicitly calibrate again')
+            compatible=(self.calibration.get('version')==mapping.VERSION and self.calibration.get('motion')==mapping.MOTION and abs(pic.width/pic.height-self.calibration['aspect'])<=.03)
+        if recalibrate:
+            # Keep the old mapping and its safety state if the new measurement fails.
+            stored=self.calibration
+            if stored:
+                self.calibration=dict(stored)
+                self.calibration.pop('suspect', None)
+                self.calibration.pop('suspect_recalibration_attempted', None)
+                self.calibration.pop('suspect_recalibration_at', None)
+            try: self.calibrate()
+            except Exception:
+                self.calibration=stored
+                raise
+        elif compatible and self.calibration.get('suspect'):
+            attempted_at=self.calibration.get('suspect_recalibration_at')
+            elapsed=time.time()-attempted_at if type(attempted_at) in (int,float) else RECALIBRATION_RETRY_SECONDS
+            if self.calibration.get('suspect_recalibration_attempted') and 0 <= elapsed < RECALIBRATION_RETRY_SECONDS:
+                raise ValueError('Automatic recalibration recently attempted; run ensure_session with recalibrate=true (or press Calibrate pointer in Safari)')
             self.calibration['suspect_recalibration_attempted']=True
+            self.calibration['suspect_recalibration_at']=time.time()
             self.save()
             self.calibrate()
-        elif not self.calibration: self.calibrate()
+        elif not compatible: self.calibrate()
 
     def check_motion_state(self, aspect):
         """Safety failures must never be treated as a retryable observation timeout."""
@@ -467,7 +489,9 @@ class Control:
         samples=c.get('landing_samples', [])
         if len(samples)<2: return (0.,0.)
         center=[median(s[i] for s in samples) for i in (0,1)]
-        agreeing=[s for s in samples if math.dist(s,center)<=.01]
+        # A 1.5% radius permits two samples up to 3% apart; the median rejects
+        # isolated large outliers once there are consistent recent observations.
+        agreeing=[s for s in samples if math.dist(s,center)<=.015]
         if len(agreeing)<2: return (0.,0.)
         offset=[median(s[i] for s in agreeing) for i in (0,1)]
         magnitude=math.hypot(*offset)
@@ -586,6 +610,9 @@ class Control:
             c.setdefault('landing_samples',[]).append(errors)
             c['landing_samples']=c['landing_samples'][-8:]
             c['landing_frame_size']=list(vision.dimensions(self.jpeg))
+            # Initial bias is learned above, even when correction hides the pointer.
+            # Only an observed large residual after correction makes this mapping
+            # suspect; successful observed/predicted outcomes do not add suspicion.
             if point is not None and corrections and math.dist(point,(x,y))>SUSPECT_MISS:
                 c['suspect']=True
             self.save()
@@ -673,7 +700,9 @@ class Control:
             if operation=='pointer_quick_probe':
                 message='Pointer ready; calibration is reused automatically' if self.calibration_compatible() else 'Pointer not calibrated; run ensure_session on the Safari sharing tab to calibrate'
             elif operation in ('ensure_session','prepare_session'):
-                self.ready()
+                recalibrate=args.get('recalibrate',False)
+                if type(recalibrate) is not bool: raise ValueError('recalibrate must be a boolean')
+                self.ready(recalibrate=recalibrate)
                 if return_app is not None: self.spotlight(return_app)
             elif operation=='set_page_board':
                 self.open_board(bool(args.get('aim')))
@@ -699,7 +728,7 @@ class Control:
                     if point is None and prediction is not None and math.dist(prediction,(args['x'],args['y']))>mapping.TOLERANCE:
                         raise ValueError('Pointer vanished after correction and its predicted landing is more than 1% from the target; no click was sent. '+self.verification_reason)
                     if point is None and prediction is None and (self.observation['first_landing'] is not None or not self.trusted_calibration(self.calibration)):
-                        raise ValueError('Pointer landing is unverified and calibration is not safe for a blind tap. Keep sharing visible, use the standard pointer and run ensure_session to recalibrate; no click was sent. '+self.verification_reason)
+                        raise ValueError('Pointer landing is unverified and calibration is not safe for a blind tap. Keep sharing visible, use the standard pointer and run ensure_session with recalibrate=true; no click was sent. '+self.verification_reason)
                     self.observation['click_sent'] = None  # A failed transport may leave delivery uncertain.
                     self.click()
                     self.observation['click_sent'] = True
@@ -712,7 +741,7 @@ class Control:
                 else: message='Pointer read (%.3f,%.3f) near the target; position not verified'%point
                 log.warning('pointer_action %s', json.dumps(dict(operation=operation, **self.observation), separators=(',',':')))
                 if self.calibration.get('suspect'):
-                    message+='; calibration marked for automatic recalibration on next ensure_session'
+                    message+='; calibration remains suspect; run ensure_session with recalibrate=true or wait for an automatic retry'
             elif operation=='type_text':
                 text=args['text']
                 if not isinstance(text,str) or len(text.encode())>500: raise ValueError('Text must contain at most 500 ASCII bytes')

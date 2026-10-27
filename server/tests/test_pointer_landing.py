@@ -57,6 +57,28 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(e.landing_offset(c),(0.,0.)); self.assertNotIn('landing_samples',c)
         e.calibration=dict(c); self.assertEqual(e.landing_offset(e.calibration),(0.,0.))
 
+    def test_first_landings_learn_consistent_samples_and_reject_outlier(self):
+        e=self.engine
+        for error in (.101,.03,.0165):
+            result=self.action([((.5,.5+error),(0,0,1,1),1),ObservationUnavailable('hidden')])
+            self.assertTrue(result['ok'],result)
+            self.assertEqual(result['landing'],'predicted')
+            self.assertFalse(e.calibration.get('suspect',False))
+        self.assertEqual(len(e.calibration['landing_samples']),3)
+        self.assertAlmostEqual(e.landing_offset(e.calibration)[1],(.03+.0165)/2)
+        # After applying the learned bias, a near-target first landing still
+        # records the underlying bias, rather than adding it twice.
+        offset=e.landing_offset(e.calibration)[1]
+        result=self.action([((.5,.5),(0,0,1,1),1)])
+        self.assertTrue(result['ok']); self.assertAlmostEqual(result['landing_offset'][1],offset)
+        self.assertAlmostEqual(e.calibration['landing_samples'][-1][1],offset)
+        self.assertAlmostEqual(e.landing_offset(e.calibration)[1],offset)
+
+    def test_large_first_miss_corrected_to_good_final_is_not_suspect(self):
+        result=self.action([((.5,.601),(0,0,1,1),1),((.5,.5098),(0,0,1,1),2)])
+        self.assertTrue(result['ok'],result); self.assertTrue(result['verified'])
+        self.assertFalse(self.engine.calibration.get('suspect',False))
+
     def test_frame_change_persists_offset_reset_even_when_pointer_is_unseen(self):
         e=self.engine
         e.calibration['landing_frame_size']=[600,1000]

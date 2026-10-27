@@ -18,7 +18,7 @@ PARAMETERS = {
     "pointer_tap": {"x": "number", "y": "number"}, "pointer_move": {"x": "number", "y": "number"},
     "swipe": {"profile": "string"}, "advance_feed": {"dy": "integer"},
     "set_page_board": {"aim": "boolean"},
-    "ensure_session": {"return_app": "string"}, "prepare_session": {"return_app": "string"},
+    "ensure_session": {"return_app": "string", "recalibrate": "boolean"}, "prepare_session": {"return_app": "string", "recalibrate": "boolean"},
 }
 
 
@@ -34,7 +34,7 @@ def tools():
             for axis in ('x', 'y'):
                 props[axis]['description'] = f'{axis} is a fraction of the FULL returned image: pixel coordinate divided by image width for x or image height for y; origin is top-left.'
         optional = {'expected_frame_id'} if name in PREPARATION else set()
-        if name in ('ensure_session', 'prepare_session'): optional.add('return_app')
+        if name in ('ensure_session', 'prepare_session'): optional.update(('return_app', 'recalibrate'))
         result.append(dict(name=name, description=f"{name.replace('_', ' ')}. Choose a device explicitly; inspect each resulting screen. HID acceptance does not prove UI success.",
                            inputSchema=dict(type="object", properties=props, required=[p for p in props if p not in optional], additionalProperties=False)))
         if name == 'scroll':
@@ -42,7 +42,8 @@ def tools():
         if name == 'advance_feed':
             result[-1]['description'] = 'Advance to the NEXT item with dy=1 (upward drag); dy=-1 returns to the previous item. Presses, drags and releases open-loop with calibration (or a compatible fallback) and never wait for the pointer to be visible, so it works over video apps. Inspect creator/title afterward; HID acceptance is not a transition count.'
         if name in ('ensure_session', 'prepare_session'):
-            result[-1]['description'] = 'Prepare the pointer: a compatible, non-suspect calibration is reused; otherwise the Safari sharing tab is brought to the front and calibrated. Calibration accepts a good fit immediately and remeasures once if poor. Optional return_app reopens that app via Spotlight after preparation. Errors tell exactly what the owner must do.'
+            props['recalibrate']['description'] = 'Set true to explicitly measure a fresh calibration, including after a failed automatic attempt; the stored mapping is preserved if calibration fails.'
+            result[-1]['description'] = 'Prepare the pointer: a compatible, non-suspect calibration is reused; otherwise the Safari sharing tab is brought to the front and calibrated. Set recalibrate=true to explicitly recalibrate. Failed automatic attempts may be retried after three minutes. Calibration accepts a good fit immediately and remeasures once if poor. Optional return_app reopens that app via Spotlight after preparation.'
         if name in ('pointer_tap', 'pointer_move'):
             result[-1]['description'] += ' Uses bounded corrections and learns consistent landing offsets. A tap is refused if the observed landing is over 3% from the target or a hidden corrected pointer is predicted over 1% away; a never-observed pointer requires trusted calibration. Inspect click_sent, verified, landing, predicted_landing and observation_method: predicted and blind landings are unverified, and even an observed landing may miss. Check the returned screen for the UI outcome.'
         if name == 'get_latest_screenshot':
