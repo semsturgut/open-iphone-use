@@ -1,5 +1,5 @@
 #!/bin/sh
-# Download/run or execute from a checkout. No shell-profile edits, app bundle or release assets.
+# Download/run or execute from a checkout. No shell-profile edits or app bundle.
 set -eu
 umask 077
 OIU_INSTALL_ROOT=${OIU_INSTALL_ROOT:-"$HOME/.local/share/open-iphone-use/runtime"}
@@ -86,14 +86,19 @@ if ! command -v "$OIU_PYTHON" >/dev/null 2>&1 || ! "$OIU_PYTHON" -c 'import sys;
     OIU_PYTHON=$(UV_PYTHON_INSTALL_DIR="$OIU_INSTALL_ROOT/python" "$OIU_UV" python find --managed-python 3.12)
 fi
 if [ "$OIU_OS" = macos ]; then
-    command -v swift >/dev/null 2>&1 || { echo 'Install Xcode/Swift 6 (xcode-select --install), then re-run setup.' >&2; exit 1; }
-    # Xcode/SDK installation and its license approval remain owner actions.
-    if [ "${OIU_SWIFT_DISABLE_SANDBOX:-0}" = 1 ]; then
-        swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --product open-iphone-use-headless --disable-sandbox --cache-path "$OIU_TMP/swift-cache"
-        OIU_NATIVE_DIR=$(swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --show-bin-path --disable-sandbox --cache-path "$OIU_TMP/swift-cache")
+    if [ -n "${OIU_MAC_HELPER_PREBUILT:-}" ] && [ -f "$OIU_MAC_HELPER_PREBUILT" ] && [ -x "$OIU_MAC_HELPER_PREBUILT" ]; then
+        OIU_NATIVE_HELPER=$OIU_MAC_HELPER_PREBUILT
     else
-        swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --product open-iphone-use-headless
-        OIU_NATIVE_DIR=$(swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --show-bin-path)
+        command -v swift >/dev/null 2>&1 || { echo 'Install Xcode/Swift 6 (xcode-select --install), then re-run setup.' >&2; exit 1; }
+        # Xcode/SDK installation and its license approval remain owner actions.
+        if [ "${OIU_SWIFT_DISABLE_SANDBOX:-0}" = 1 ]; then
+            swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --product open-iphone-use-headless --disable-sandbox --cache-path "$OIU_TMP/swift-cache"
+            OIU_NATIVE_DIR=$(swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --show-bin-path --disable-sandbox --cache-path "$OIU_TMP/swift-cache")
+        else
+            swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --product open-iphone-use-headless
+            OIU_NATIVE_DIR=$(swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --show-bin-path)
+        fi
+        OIU_NATIVE_HELPER="$OIU_NATIVE_DIR/open-iphone-use-headless"
     fi
 else
     if ! command -v bluetoothctl >/dev/null 2>&1; then
@@ -109,10 +114,11 @@ fi
 "$OIU_INSTALL_ROOT/venv/bin/python" -m pip install --upgrade pip
 "$OIU_INSTALL_ROOT/venv/bin/python" -m pip install --upgrade "$OIU_SOURCE_DIR/server"
 if [ "$OIU_OS" = macos ]; then
-    cp "$OIU_NATIVE_DIR/open-iphone-use-headless" "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless.new"
+    cp "$OIU_NATIVE_HELPER" "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless.new"
     chmod 755 "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless.new"
     mv "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless.new" "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless"
 fi
+cp "$OIU_SOURCE_DIR/setup.sh" "$OIU_INSTALL_ROOT/setup.sh"
 cp "$OIU_SOURCE_DIR/macos/Resources/open-iphone-use-skill/SKILL.md" "$OIU_INSTALL_ROOT/agent-skill.md"
 # Remove the old template name; registration installs only the canonical skill.
 rm -f "$OIU_INSTALL_ROOT/SKILL.md"
