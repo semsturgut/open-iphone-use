@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Open iPhone Use — MCP control for your iPhone</title>
-  <meta name="description" content="Connect an iPhone to AI agents with a Mac, Bluetooth keyboard and mouse, Safari screen sharing, and a built-in MCP server. No iPhone app or extra hardware required.">
+  <meta name="description" content="Connect iPhones to AI agents with a CLI, Bluetooth HID, Safari screen sharing and MCP.">
   <meta name="robots" content="index,follow,max-image-preview:large">
   <meta name="theme-color" content="#101915">
   <link rel="canonical" href="https://semsturgut.github.io/open-iphone-use/">
@@ -14,18 +14,18 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Open iPhone Use">
   <meta property="og:title" content="Open iPhone Use — MCP control for your iPhone">
-  <meta property="og:description" content="Use your iPhone with AI agents. Mac app, Safari screen sharing, Bluetooth HID, and MCP in one open-source project.">
+  <meta property="og:description" content="Use your iPhones with AI agents through the CLI, Safari screen sharing, Bluetooth HID and MCP.">
   <meta property="og:url" content="https://semsturgut.github.io/open-iphone-use/">
   <meta property="og:image" content="https://semsturgut.github.io/open-iphone-use/assets/icon.png">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="512">
   <meta property="og:image:height" content="512">
-  <meta property="og:image:alt" content="Open iPhone Use macOS app icon">
+  <meta property="og:image:alt" content="Open iPhone Use icon">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Open iPhone Use — MCP control for your iPhone">
   <meta name="twitter:description" content="Connect an iPhone to AI agents with a Mac, Safari, Bluetooth, and MCP.">
   <meta name="twitter:image" content="https://semsturgut.github.io/open-iphone-use/assets/icon.png">
-  <meta name="twitter:image:alt" content="Open iPhone Use macOS app icon">
+  <meta name="twitter:image:alt" content="Open iPhone Use icon">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -36,13 +36,12 @@
     "@type":"SoftwareApplication",
     "name":"Open iPhone Use",
     "applicationCategory":"DeveloperApplication",
-    "operatingSystem":"macOS 13 or later (Apple Silicon build)",
+    "operatingSystem":"macOS, Linux, Windows",
     "description":"Open-source MCP bridge for controlling an iPhone with Bluetooth HID and Safari screen sharing.",
     "image":"https://semsturgut.github.io/open-iphone-use/assets/icon.png",
-    "softwareVersion":"0.0.2",
+    "softwareVersion":"0.0.3",
     "license":"https://www.apache.org/licenses/LICENSE-2.0",
     "codeRepository":"https://github.com/semsturgut/open-iphone-use",
-    "downloadUrl":"https://github.com/semsturgut/open-iphone-use/releases",
     "offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}
   }
   </script>
@@ -56,34 +55,34 @@
   <main id="top">
     <section class="hero wrap">
       <div class="hero-copy">
-        <p class="availability"><span></span> Open source · MCP · macOS</p>
+        <p class="availability"><span></span> Open source · CLI · MCP</p>
         <h1>Your AI agent.<br>Your actual iPhone.</h1>
-        <p class="lede">Open iPhone Use connects your iPhone to an AI agent through your Mac. The Mac sends keyboard and pointer input; Safari shares the phone screen over Wi-Fi.</p>
-        <div class="hero-actions"><a class="button primary" href="https://github.com/semsturgut/open-iphone-use/releases">Get the Mac app <span>↓</span></a><a class="text-link" href="#how">See the setup <span>↘</span></a></div>
-        <p class="requirements"><b>All you need:</b> an iPhone and an Apple Silicon MacBook. No iPhone app. No extra hardware.</p>
+        <p class="lede">Connect multiple iPhones to an AI agent through a local CLI server. Bluetooth sends keyboard and pointer input; Safari shares each screen over Wi-Fi.</p>
+        <div class="hero-actions"><a class="button primary" href="https://github.com/semsturgut/open-iphone-use#quick-start">CLI setup <span>↗</span></a><a class="text-link" href="#how">See the setup <span>↘</span></a></div>
+        <p class="requirements"><b>macOS app deprecated — use the CLI.</b> Tested on macOS with iPhone; Windows and Linux backends have not been tested on real hardware. Reports and contributions welcome.</p>
       </div>
-      <figure class="device-view"><div class="device-top"><span class="live-dot"></span><span>iPhone connected</span><span class="latency">Live screen</span></div><div class="screen-frame"><img src="assets/connected.png" alt="Open iPhone Use Mac app showing a live iPhone screen with a cooking video and its controls"></div><figcaption>Real iPhone screen, received over local Wi-Fi.</figcaption></figure>
+      <figure class="device-view"><div class="device-top"><span class="live-dot"></span><span>Local web UI</span><span class="latency">Multiple iPhones</span></div><div class="screen-frame"><img src="assets/web-ui.png" alt="Local web UI with two iPhone cards, Bluetooth and screen-sharing status lights, live thumbnails and sharing controls"></div><figcaption>Independent Bluetooth and screen-sharing lights, thumbnails and frame age for each phone.</figcaption></figure>
       <div class="hero-rule"><span>Bluetooth HID</span><span>Local screen sharing</span><span>Standard MCP tools</span></div>
     </section>
 
-    <section class="demo-band" id="demo" aria-labelledby="demo-title"><div class="wrap demo-layout"><div><p class="section-kicker">A real device, a real task</p><h2 id="demo-title">Search. Watch. Swipe. Like.</h2><p>The agent searches Instagram for dinner recipes, opens a cooking reel, moves through the feed, and likes a video. Every action goes through MCP, Bluetooth HID, and the live screen stream.</p><a class="text-link" href="https://github.com/semsturgut/open-iphone-use">Explore the source <span>↗</span></a></div><div class="demo-media"><div class="video-shell"><video controls playsinline preload="metadata" poster="assets/connected.png" aria-label="Open iPhone Use real-device Instagram demo"><source src="assets/demo.mp4" type="video/mp4"><source src="https://github.com/semsturgut/open-iphone-use/releases/download/v0.0.1/open-iphone-use-instagram-demo.mov" type="video/quicktime"><a href="https://github.com/semsturgut/open-iphone-use/releases">Download the demo video</a></video><span class="video-caption">Open iPhone Use · version 0.0.1</span></div><aside class="prompt-card" aria-label="Demo prompt"><p class="prompt-label">Prompt used</p><blockquote>“Search Instagram for a food-related topic in English. Open and watch a Reel, scroll through the feed, then like a Reel.”</blockquote><p class="prompt-note">The request was given in natural language; the agent handled the on-screen steps through MCP.</p></aside></div></div></section>
+    <section class="demo-band" id="demo" aria-labelledby="demo-title"><div class="wrap demo-layout"><div><p class="section-kicker">A real device, a real task</p><h2 id="demo-title">Search. Watch. Swipe. Like.</h2><p>The agent searches Instagram for dinner recipes, opens a cooking reel, moves through the feed, and likes a video. Every action goes through MCP, Bluetooth HID, and the live screen stream.</p><a class="text-link" href="https://github.com/semsturgut/open-iphone-use">Explore the source <span>↗</span></a></div><div class="demo-media"><div class="video-shell"><video controls playsinline preload="metadata" poster="assets/web-ui.png" aria-label="Open iPhone Use real-device Instagram demo"><source src="assets/demo.mp4" type="video/mp4"><a href="assets/demo.mp4">Watch the demo video</a></video><span class="video-caption">Recorded with an earlier version · 0.0.1</span></div><aside class="prompt-card" aria-label="Demo prompt"><p class="prompt-label">Prompt used</p><blockquote>“Search Instagram for a food-related topic in English. Open and watch a Reel, scroll through the feed, then like a Reel.”</blockquote><p class="prompt-note">The request was given in natural language; the agent handled the on-screen steps through MCP.</p></aside></div></div></section>
 
-    <section class="how wrap" id="how"><div class="section-heading"><p class="section-kicker">The connection</p><h2>Three parts. One clear path.</h2><p>The iPhone remains yours. The Mac provides input and a private screen receiver; your MCP client brings the agent.</p></div>
-      <div class="signal-flow" aria-label="iPhone screen shared to Mac, read by AI agent, and controlled by Bluetooth input">
+    <section class="how wrap" id="how"><div class="section-heading"><p class="section-kicker">The connection</p><h2>Three parts. One clear path.</h2><p>Your host provides Bluetooth input and a private screen receiver; your MCP client brings the agent.</p></div>
+      <div class="signal-flow" aria-label="iPhone screen shared to the host, read by an AI agent, and controlled by Bluetooth input">
         <div class="flow-node phone"><span class="node-glyph">▯</span><div><b>iPhone</b><small>Safari shares the screen</small></div></div><span class="flow-link"><i>Wi-Fi</i></span>
-        <div class="flow-node mac"><span class="node-glyph">▱</span><div><b>Mac app</b><small>Screen receiver + Bluetooth HID</small></div></div><span class="flow-link"><i>MCP</i></span>
+        <div class="flow-node mac"><span class="node-glyph">▱</span><div><b>CLI server</b><small>Screen receiver + Bluetooth HID</small></div></div><span class="flow-link"><i>MCP</i></span>
         <div class="flow-node agent"><span class="node-glyph">✳</span><div><b>Your agent</b><small>Sees, decides, acts</small></div></div>
       </div>
       <div class="protocol-note"><span class="pulse"></span><p><b>Closed loop:</b> a fresh screenshot goes to the agent after actions, so it can check the result before moving on.</p></div>
     </section>
 
-    <section class="setup-band" id="setup"><div class="wrap setup-grid"><div class="setup-intro"><p class="section-kicker">Start with what you own</p><h2>Download once.<br>Pair once.<br>Then use MCP.</h2><p>The Mac DMG contains the app and its local MCP server. On iPhone, open the private sharing page in Safari and approve screen sharing.</p><a class="button dark-button" href="https://github.com/semsturgut/open-iphone-use/releases">Download for macOS <span>↓</span></a></div><div class="steps"><article><span>01</span><div><h3>Install on the Mac</h3><p>Open the DMG and move Open iPhone Use to Applications. Allow Bluetooth when macOS asks.</p></div></article><article><span>02</span><div><h3>Pair your iPhone</h3><p>Turn on AssistiveTouch and pair Open iPhone Use from Bluetooth Devices.</p></div></article><article><span>03</span><div><h3>Share from Safari</h3><p>Open the Mac's private link on the iPhone, trust the local certificate, and start screen sharing.</p></div></article><article><span>04</span><div><h3>Connect an MCP client</h3><p>Add the bundled MCP server to Codex or another image-capable agent. The Mac app does not need an AI API key.</p></div></article></div></div></section>
+    <section class="setup-band" id="setup"><div class="wrap setup-grid"><div class="setup-intro"><p class="section-kicker">Start with what you own</p><h2>Run the CLI.<br>Pair each phone.<br>Then use MCP.</h2><p>From a reviewed checkout, install and start the CLI. Open the loopback web UI without a token, pair each iPhone over Bluetooth, and use new to get its private link and QR.<br><br><code>sh setup.sh</code> (macOS/Linux) or <code>.\setup.ps1</code> (Windows)<br><code>open-iphone-use serve</code></p><a class="button dark-button" href="https://github.com/semsturgut/open-iphone-use#quick-start">Read CLI setup <span>↗</span></a></div><div class="steps"><article><span>01</span><div><h3>Install the CLI</h3><p>Setup installs the managed runtime. Allow Bluetooth when the host asks.</p></div></article><article><span>02</span><div><h3>Pair your iPhone</h3><p>Turn on AssistiveTouch and pair Open iPhone Use from Bluetooth Devices.</p></div></article><article><span>03</span><div><h3>Share from Safari</h3><p>Open the phone's private link in Safari, trust the local certificate, and start screen sharing. Share or Copy the link, or scan its QR.</p></div></article><article><span>04</span><div><h3>Connect an MCP client</h3><p>Setup registers the CLI MCP server and skill for detected clients. Use an image-capable agent; the server does not need an AI API key.</p></div></article></div></div></section>
 
-    <section class="calibration wrap"><div class="calibration-image"><img src="assets/calibration.png" loading="lazy" alt="Two-point pointer calibration board on the iPhone screen"></div><div><p class="section-kicker">Two quick taps</p><h2>Calibrate, then let the agent work.</h2><p>The first setup measures pointer movement with two clicks on a simple board. Compatible calibration is saved on the Mac and reused across chats. If it cannot see the pointer safely, it stops before tapping.</p><a class="text-link" href="https://github.com/semsturgut/open-iphone-use/blob/main/docs/device-matrix.md">Read device checks <span>↗</span></a></div></section>
+    <section class="calibration wrap"><div><p class="section-kicker">Pointer preparation</p><h2>Fast calibration, careful taps.</h2><p>Seven samples on the Safari board fit the visual pointer; a good fit is accepted immediately. The default auto-hiding AssistiveTouch pointer is supported.</p></div><div><p>Taps use bounded corrections and report observed, predicted or blind landings and whether they were verified. Predicted and blind landings are unverified: inspect the screen after every action. Recalibrate explicitly with <code>ensure_session</code> or <code>prepare_session</code> and <code>recalibrate=true</code>, or use Safari’s Calibrate pointer button.</p><a class="text-link" href="https://github.com/semsturgut/open-iphone-use/blob/main/docs/headless-server.md#pointer-accuracy-and-scroll-direction">Read pointer details <span>↗</span></a></div></section>
 
     <section class="difference-band"><div class="wrap difference"><div><p class="section-kicker">Built for agent tools</p><h2>Different from iPhone Mirroring.</h2></div><p>Apple's iPhone Mirroring brings an iPhone to the Mac desktop. Open iPhone Use makes the screen and input available to MCP agents: a local Safari capture stream, Bluetooth keyboard and pointer, and standard tools your agent can call.</p></div></section>
 
-    <section class="roadmap wrap"><div><p class="section-kicker">The project grows outward</p><h2>Mac + iPhone today.<br>More ways to run it next.</h2></div><div class="roadmap-list"><p><span class="state-live">Available</span> Apple Silicon Mac app · iPhone Safari capture · MCP</p><p><span>Planned</span> Linux and Windows builds</p><p><span>Planned</span> ESP32 HID support · no computer in use</p><p><span>Planned</span> Raspberry Pi host · no Mac or PC in the setup</p><p><span>Planned</span> Multiple iPhones</p></div></section>
+    <section class="roadmap wrap"><div><p class="section-kicker">The project grows outward</p><h2>Mac + iPhone today.<br>More ways to run it next.</h2></div><div class="roadmap-list"><p><span class="state-live">Available</span> CLI server · iPhone Safari capture · MCP</p><p><span>Implemented</span> Linux and Windows HID backends; real hardware untested — reports and PRs welcome</p><p><span>Planned</span> ESP32 HID support · no computer in use</p><p><span>Planned</span> Raspberry Pi host · no Mac or PC in the setup</p><p><span>Implemented</span> Independent devices, frames and HID routing</p></div></section>
   </main>
 
   <footer><div class="wrap footer-inner"><a class="brand" href="#top"><img src="assets/icon.png" alt="" width="30" height="30"><span>Open iPhone Use</span></a><p>Open source under Apache-2.0. Made for the tools you already use.</p><div><a href="https://github.com/semsturgut/open-iphone-use">GitHub</a><a href="https://github.com/semsturgut/open-iphone-use/blob/main/README.md">Documentation</a><a href="https://github.com/semsturgut/open-iphone-use/blob/main/ROADMAP.md">Roadmap</a></div></div></footer>

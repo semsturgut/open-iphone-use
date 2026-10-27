@@ -210,7 +210,7 @@ public final class BLEHIDPeripheral: NSObject {
         motionTask = nil
     }
 
-    /// Scrolls the focused scroll view. Negative moves the content up.
+    /// Scrolls the focused scroll view. Positive advances content upward on iOS.
     ///
     /// AssistiveTouch turns wheel reports into the same scroll gestures a trackpad produces, so
     /// this is how a long feed or a settings list is paged without hunting for a drag handle.
@@ -338,9 +338,9 @@ public final class BLEHIDPeripheral: NSObject {
         guard let manager else { return }
 
         let hidInfo = CBMutableCharacteristic(type: Self.hidInformation, properties: [.read],
-                                              value: Data([0x11, 0x01, 0x00, 0x02]), permissions: [.readEncryptionRequired])
+                                              value: nil, permissions: [.readEncryptionRequired])
         let map = CBMutableCharacteristic(type: Self.reportMap, properties: [.read],
-                                          value: Self.reportDescriptor, permissions: [.readEncryptionRequired])
+                                          value: nil, permissions: [.readEncryptionRequired])
         let control = CBMutableCharacteristic(type: Self.hidControlPoint, properties: [.writeWithoutResponse],
                                               value: nil, permissions: [.writeEncryptionRequired])
         let mode = CBMutableCharacteristic(type: Self.protocolMode, properties: [.read, .writeWithoutResponse],
@@ -370,7 +370,7 @@ public final class BLEHIDPeripheral: NSObject {
         onChange?()
     }
 
-    private static let reportDescriptor = Data([
+    public static let reportDescriptor = Data([
         0x05, 0x01,       // Usage Page (Generic Desktop)
         0x09, 0x06,       // Usage (Keyboard)
         0xA1, 0x01,       // Collection (Application)
@@ -418,7 +418,7 @@ extension BLEHIDPeripheral: @preconcurrency CBPeripheralManagerDelegate {
             return
         }
         peripheral.startAdvertising([
-            CBAdvertisementDataLocalNameKey: "Open iPhone Use",
+            CBAdvertisementDataLocalNameKey: ProcessInfo.processInfo.environment["OIU_DEVICE_NAME"] ?? "Open iPhone Use",
             CBAdvertisementDataServiceUUIDsKey: [Self.hidService],
         ])
     }
@@ -438,6 +438,9 @@ extension BLEHIDPeripheral: @preconcurrency CBPeripheralManagerDelegate {
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral,
                                   didSubscribeTo characteristic: CBCharacteristic) {
+        // A headless device route is permanently bound to an owner-selected central.
+        if let expected = ProcessInfo.processInfo.environment["OIU_EXPECTED_CENTRAL"],
+           central.identifier.uuidString != expected { return }
         if let id = inputReportID(for: characteristic),
            subscribedCentral == nil || subscribedCentral?.identifier == central.identifier {
             subscribedReportIDs.insert(id)

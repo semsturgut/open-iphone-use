@@ -106,24 +106,41 @@ extension OpenIPhoneUseController {
 
         let wiggle = Self.pointerWiggleUnits
         let shift = pointerCalibration.fraction(forUnits: wiggle, axis: .x) ?? 0
-        try await hid.moveSmooth(dx: wiggle, dy: 0, steps: 1)
-        let after = await waitForFreshFrame(since: before.frameID)
-        try await hid.moveSmooth(dx: -wiggle, dy: 0, steps: 1)
-        guard let after else { return nil }
-
         let search = PointerLocator.Search(near: near ?? .init(x: 0.5, y: 0.5),
                                            reach: reach ?? .init(x: 0.5, y: 0.5))
-        return PointerLocator.locate(before: before.jpeg, after: after.jpeg, search: search, shift: shift)
+        try await hid.moveSmooth(dx: wiggle, dy: 0, steps: 1)
+        var answer: PointerLocator.Point?
+        do {
+            let deadline = Date().addingTimeInterval(3)
+            var lastID = before.frameID
+            var previous: PointerLocator.Point?
+            var stableSince: Date?
+            while Date() < deadline {
+                try Task.checkCancellation()
+                if let frame = await frames.latestFrame(), frame.frameID != lastID,
+                   await frames.ageMilliseconds(of: frame) < 1_000 {
+                    lastID = frame.frameID
+                    if let point = PointerLocator.locate(before: before.jpeg, after: frame.jpeg, search: search, shift: shift) {
+                        if let previous, hypot(previous.x-point.x, previous.y-point.y) <= 0.003 {
+                            if let stableSince, frame.capturedAt.timeIntervalSince(stableSince) >= 0.12 { answer = point; break }
+                        } else { stableSince = frame.capturedAt }
+                        previous = point
+                    } else { previous = nil; stableSince = nil }
+                }
+                try await Task.sleep(for: .milliseconds(40))
+            }
+        } catch {
+            try? await hid.moveSmooth(dx: -wiggle, dy: 0, steps: 1)
+            throw error
+        }
+        try await hid.moveSmooth(dx: -wiggle, dy: 0, steps: 1)
+        return answer
     }
 
     /// Finds the pointer near where it is expected, widening the search if that fails.
     func locatePointer(expectedX: Double, expectedY: Double) async throws -> PointerLocator.Point? {
         let near = PointerLocator.Point(x: expectedX, y: expectedY)
         if let found = try await locatePointer(near: near, reach: .init(x: 0.18, y: 0.12)),
-           PointerLocator.usable(found) {
-            return found
-        }
-        if let found = try await locatePointer(near: .init(x: 0.5, y: 0.5), reach: .init(x: 0.5, y: 0.5)),
            PointerLocator.usable(found) {
             return found
         }
@@ -189,9 +206,8 @@ extension OpenIPhoneUseController {
         for (ux, uy) in stops {
             try Task.checkCancellation()
             try await movePointerToUnits(x: ux, y: uy)
-            // One fresh visible pointer is enough to establish that pressing cannot
-            // hit the status bar. No extra motion, wiggle or multi-frame hover validation.
-            _ = try await observeBoardPointer(requireStable: false)
+            // Require the same settled, board-contained pointer as other calibration presses.
+            _ = try await observeBoardPointer()
             let sent = Date()
             try await hid.click(button: "left")
             guard let tap = await waitForTap(since: sent) else { throw PointerControlError.noTaps }
@@ -317,20 +333,22 @@ extension OpenIPhoneUseController {
 
     func observeBoardPointer(requireStable: Bool = true) async throws -> PointerLocator.Point {
         let after = Date().addingTimeInterval(0.15)
-        let deadline = Date().addingTimeInterval(2)
+        let deadline = Date().addingTimeInterval(4)
         var previous: PointerLocator.Point?, lastID: String?
+        var stableSince: Date?
         while Date() < deadline {
             try Task.checkCancellation()
             if let frame = await frames.latestFrame(), frame.frameID != lastID, frame.capturedAt >= after,
-               await frames.ageMilliseconds(of: frame) < 1_000,
-               let board = ViewportMarkers.locate(jpeg: frame.jpeg),
-               let point = BoardPointerLocator.locate(jpeg: frame.jpeg, board: board) {
+               await frames.ageMilliseconds(of: frame) < 1_000 {
                 lastID = frame.frameID
-                if !requireStable { return point }
-                if let previous, max(abs(point.x - previous.x), abs(point.y - previous.y)) < 0.003 {
-                    return point
-                }
-                previous = point
+                if let board = ViewportMarkers.locate(jpeg: frame.jpeg),
+                   let point = BoardPointerLocator.locate(jpeg: frame.jpeg, board: board) {
+                    if !requireStable { return point }
+                    if let previous, hypot(point.x - previous.x, point.y - previous.y) < 0.003 {
+                        if let stableSince, frame.capturedAt.timeIntervalSince(stableSince) >= 0.12 { return point }
+                    } else { stableSince = frame.capturedAt }
+                    previous = point
+                } else { previous = nil; stableSince = nil }
             }
             try await Task.sleep(for: .milliseconds(25))
         }
@@ -367,27 +385,30 @@ extension OpenIPhoneUseController {
 
     /// Finds the pointer, corrects a miss immediately, and learns from a normal one.
     func correctPointerAim(_ x: Double, _ y: Double) async throws {
-        guard let span = pointerCalibration.span else { return }
-        guard let found = try await locatePointer(expectedX: x, expectedY: y) else { throw PointerControlError.notFound }
-        let missX = abs(found.x - x), missY = abs(found.y - y)
-        if max(missX, missY) <= PointerCalibration.maximumLearnedMiss {
-            pointerCalibration.remember(.x, aimed: pointerCalibration.corrected(x, axis: .x), landed: found.x)
-            pointerCalibration.remember(.y, aimed: pointerCalibration.corrected(y, axis: .y), landed: found.y)
-            savePointerCalibration()
-        }
-        guard missX > Self.pointerAimTolerance || missY > Self.pointerAimTolerance else { return }
-        let dx = Int(((x - found.x) * Double(span.width)).rounded())
-        let dy = Int(((y - found.y) * Double(span.height)).rounded())
-        try await sendPointerDelta(dx: dx, dy: dy)
-        pointerUnits = nil // the correction moved it; the next move re-homes
+        guard let span = pointerCalibration.span else { throw PointerControlError.notCalibrated }
+        try await PointerAim.align(target: .init(x: x, y: y), span: span, observe: {
+            // A second independent observation is required; ambiguity rejects the tap.
+            guard let first = try await self.locatePointer(expectedX: x, expectedY: y),
+                  let second = try await self.locatePointer(expectedX: x, expectedY: y),
+                  hypot(first.x-second.x, first.y-second.y) <= 0.003 else { return nil }
+            return second
+        }, move: { dx, dy in
+            try await self.sendPointerDelta(dx: dx, dy: dy)
+            self.pointerUnits = nil
+        })
     }
 
-    /// Taps a screen fraction. `aim` finds the pointer first and corrects the miss before pressing.
+    /// Every coordinate tap is visually verified before sending a click.
     public func pointerTap(x: Double, y: Double, aim: Bool = false) async throws {
-        try await pointerMove(x: x, y: y, aim: aim)
-        // CoreBluetooth acceptance can precede physical pointer processing.
-        try await Task.sleep(for: .milliseconds(200))
+        _ = try await validatedTap(x: x, y: y)
+    }
+
+    private func validatedTap(x: Double, y: Double) async throws -> Date {
+        try await pointerMove(x: x, y: y, aim: false)
+        try await correctPointerAim(x, y)
+        let sent = Date()
         try await hid.click(button: "left")
+        return sent
     }
 
     /// The outcome of a tap, reported so a caller can tell a hit from a miss.
@@ -437,65 +458,24 @@ extension OpenIPhoneUseController {
 
     /// Jumps to a screen fraction, then taps. See `pointerJump`.
     public func pointerJumpTap(x: Double, y: Double) async throws {
-        try await pointerJump(x: x, y: y)
-        try await hid.click(button: "left")
+        try await pointerTap(x: x, y: y)
     }
 
-    /// Taps a screen fraction and learns from where the board says the click landed.
-    ///
-    /// The pointer cannot be seen in the captured frames, so the board is the sensor: it
-    /// reports the exact landing, which both corrects the current attempt and refines the
-    /// per-axis fit. This is the closed loop that actually converges here.
+    /// Taps only after visual convergence, then reports the board's measured landing.
     @discardableResult
     public func probeTap(x: Double, y: Double, attempts: Int = 2) async throws -> FrameStore.PointerTap? {
-        guard pointerCalibration.span != nil else { throw PointerControlError.notCalibrated }
         guard await frames.isCaptureActive() else { throw ControlFrameError.captureInactive }
         _ = try await calibrationViewport()
-        try await validateCalibrationScreen()
-        guard let span = pointerCalibration.span,
-              var unitsX = pointerCalibration.units(for: x, axis: .x),
-              var unitsY = pointerCalibration.units(for: y, axis: .y) else { throw PointerControlError.notCalibrated }
-        var last: FrameStore.PointerTap?
-        let limit = min(2, max(1, attempts))
-        for attempt in 0..<limit {
-            try Task.checkCancellation()
-            try await movePointerToUnits(x: unitsX, y: unitsY)
-            try Task.checkCancellation()
-            try await requirePointerOnBoard()
-            let sent = Date()
-            try await hid.click(button: "left")
-            guard let tap = await waitForTap(since: sent) else { throw PointerControlError.noTaps }
-            let viewport = try await calibrationViewport()
-            let screenTap = FrameStore.PointerTap(x: viewport.screenFraction(forViewport: tap.x, axis: .x),
-                                                  y: viewport.screenFraction(forViewport: tap.y, axis: .y), at: tap.at)
-            last = screenTap
-            let missX = abs(screenTap.x - x), missY = abs(screenTap.y - y)
-            if max(missX, missY) <= PointerCalibration.maximumLearnedMiss {
-                pointerCalibration.remember(.x, aimed: Double(unitsX) / Double(span.width), landed: screenTap.x)
-                pointerCalibration.remember(.y, aimed: Double(unitsY) / Double(span.height), landed: screenTap.y)
-                // This is new training, so an earlier validation no longer describes this model.
-                pointerCalibration.setQuality(nil)
-                pointerCalibration.setEvidence(.twoPointEstimate)
-                savePointerCalibration()
-            }
-            if missX <= Self.pointerAimTolerance, missY <= Self.pointerAimTolerance { break }
-            guard attempt < limit - 1,
-                  let correction = PointerRetry.correction(targetX: x, targetY: y,
-                                                           observedX: screenTap.x, observedY: screenTap.y) else { break }
-            unitsX += Int((correction.x * Double(span.width)).rounded())
-            unitsY += Int((correction.y * Double(span.height)).rounded())
-        }
-        return last
+        let sent = try await validatedTap(x: x, y: y)
+        guard let tap = await waitForTap(since: sent) else { throw PointerControlError.noTaps }
+        let viewport = try await calibrationViewport()
+        return FrameStore.PointerTap(x: viewport.screenFraction(forViewport: tap.x, axis: .x),
+                                     y: viewport.screenFraction(forViewport: tap.y, axis: .y), at: tap.at)
     }
 
-    /// Taps a fraction by finding the pointer first, without a prior calibration span.
+    /// Compatibility alias for a visually verified coordinate tap.
     public func pointerTapLocated(x: Double, y: Double) async throws {
-        guard let found = try await locatePointer(expectedX: x, expectedY: y),
-              let span = pointerCalibration.span else { throw PointerControlError.notFound }
-        let dx = Int(((x - found.x) * Double(span.width)).rounded())
-        let dy = Int(((y - found.y) * Double(span.height)).rounded())
-        try await sendPointerDelta(dx: dx, dy: dy)
-        try await hid.click(button: "left")
+        try await pointerTap(x: x, y: y, aim: true)
     }
 
     /// Scrolls the screen. Positive numbers move the content up, so a feed advances.
@@ -547,7 +527,8 @@ extension OpenIPhoneUseController {
         case "wheel":
             guard (1...1200).contains(wheelPerItem) else { throw HIDReportError.movementOutOfRange }
             try await pointerMove(x: 0.5, y: 0.5)
-            try await hid.scroll(wheel: items > 0 ? wheelPerItem : -wheelPerItem)
+            guard let wheel = FeedDirection.wheelDelta(items: items, amount: wheelPerItem) else { throw FeedControlError.oneItemAtATime }
+            try await hid.scroll(wheel: wheel)
         default: throw FeedControlError.invalidMode
         }
     }

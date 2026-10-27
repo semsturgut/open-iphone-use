@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Share this iPhone</title><style>body{font:18px -apple-system,sans-serif;margin:40px 24px;color:#17324d}p{max-width:50ch;line-height:1.6}</style><h1>Share this iPhone</h1><p id="status">Preparing a private screen-sharing session…</p><script>
+(async () => {
+  const token = new URLSearchParams(location.search).get('token') || '';
+  const key = 'oiu-capture-' + token;
+  try {
+    let path = null;
+    try { path = localStorage.getItem(key); } catch {} 
+    if (!path) {
+      const response = await fetch('/api/enroll', {method:'POST', headers:{'Content-Type':'application/json','X-Open-iPhone-Use-Invite':token},body:JSON.stringify({})});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not create sharing session');
+      path = result.capture_path; try { localStorage.setItem(key,path); } catch {}
+    }
+    location.replace(path);
+  } catch(error) { document.querySelector('#status').textContent=error.message; }
+})();
+</script></html>

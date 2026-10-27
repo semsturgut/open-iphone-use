@@ -38,7 +38,7 @@ public final class OpenIPhoneUseController: ObservableObject {
         let at: Date
     }
     var lastPointerAttempt: PointerAttempt?
-    static let pointerCalibrationKey = "OpenIPhoneUsePointerCalibration"
+    static var pointerCalibrationKey: String { "OpenIPhoneUsePointerCalibration" + (ProcessInfo.processInfo.environment["OIU_DEVICE_NAMESPACE"] ?? "") }
     /// Mouse units the pointer is wiggled by when it has to be found on screen.
     static let pointerWiggleUnits = 12
     /// A miss bigger than this is corrected before pressing.
@@ -54,7 +54,7 @@ public final class OpenIPhoneUseController: ObservableObject {
     private var activeActionTask: Task<Void, Never>?
     private let maximumFrameAgeMilliseconds = 5_000
 
-    public init() {
+    public init(headless: Bool = false) {
         receiver = LocalCaptureReceiver(frames: frames)
         receiver.onCalibrationRequest = { [weak self] force in
             guard let self else { return nil }
@@ -91,8 +91,8 @@ public final class OpenIPhoneUseController: ObservableObject {
         // Start the radio and the receiver on launch. Both are what the phone connects to, and
         // an agent cannot press a button in the app; requiring it made every restart a manual
         // step and left the phone reporting "capture paused" until someone noticed.
-        startHID()
-        startCaptureReceiver()
+        if !headless || ProcessInfo.processInfo.environment["OIU_DISABLE_BLUETOOTH"] != "1" { startHID() }
+        if !headless { startCaptureReceiver() }
     }
 
     deinit { captureWatchdog?.cancel() }
@@ -209,6 +209,39 @@ public final class OpenIPhoneUseController: ObservableObject {
             return fail(request, "Unknown device_id. Use `iphone`.")
         }
 
+        // Only enabled in the dedicated headless helper. The app retains its original API.
+        if ProcessInfo.processInfo.environment["OIU_HEADLESS"] == "1" {
+            switch request.operation {
+            case "headless_identity":
+                return BrokerResponse(requestID: request.requestID, ok: true,
+                                      message: String(ProcessInfo.processInfo.processIdentifier))
+            case "ingest_frame":
+                guard let text = request.text, let data = Data(base64Encoded: text) else {
+                    return fail(request, "Invalid frame encoding.")
+                }
+                do {
+                    let frame = try await frames.put(jpeg: data)
+                    let controls = "{\"frameID\":\"\(frame.frameID)\",\"fps\":\(captureFramesPerSecond),\"boardEpoch\":\(receiver.boardEpoch),\"boardOpen\":\(receiver.boardOpen)}"
+                    return BrokerResponse(requestID: request.requestID, ok: true, message: controls)
+                } catch { return fail(request, "Invalid JPEG frame.") }
+            case "capture_tap":
+                if let x = request.x, let y = request.y { await frames.recordTap(x: x, y: y) }
+                return BrokerResponse(requestID: request.requestID, ok: true, message: "Tap recorded.")
+            case "capture_stop":
+                await frames.setCaptureActive(false)
+                return await handle(BrokerRequest(operation: "stop_control", deviceID: Self.deviceID))
+            default: break
+            }
+            let reads = ["guide", "list_devices", "get_device_status", "get_latest_screenshot", "stop_control"]
+            if !reads.contains(request.operation) {
+                guard let expected = ProcessInfo.processInfo.environment["OIU_EXPECTED_CENTRAL"],
+                      centralIdentifier == expected else {
+                    hid.releaseAll()
+                    return fail(request, "Pairing identity mismatch; explicitly bind the connected central before input.")
+                }
+            }
+        }
+
         if request.operation == "guide" {
             return BrokerResponse(requestID: request.requestID, ok: true, message: Self.guideText)
         }
@@ -233,7 +266,7 @@ public final class OpenIPhoneUseController: ObservableObject {
             let captureMessage = await frames.error()
             let wire = ScreenshotFrameWire(frameID: frame.frameID, capturedAt: frame.capturedAt,
                                            ageMilliseconds: age, captureActive: captureActive,
-                                           mimeType: "image/jpeg", base64: frame.jpeg.base64EncodedString())
+                                           mimeType: "image/jpeg", jpeg: frame.jpeg)
             return BrokerResponse(requestID: request.requestID, ok: true,
                                   message: "Latest iPhone frame; age=\(age) ms; captureActive=\(captureActive)." + (captureMessage.map { " \($0)" } ?? ""),
                                   frame: wire)
@@ -305,7 +338,9 @@ public final class OpenIPhoneUseController: ObservableObject {
                 guard (-127...127).contains(dx), (-127...127).contains(dy) else { return fail(request, "Pointer deltas must be between -127 and 127.") }
                 pointerUnits = nil
                 try await hid.moveSmooth(dx: dx, dy: dy, steps: request.steps, intervalMilliseconds: request.intervalMilliseconds)
-            case "click": try await hid.click(button: request.button ?? "left")
+            case "click":
+                guard try await locatePointer() != nil else { throw PointerControlError.notFound }
+                try await hid.click(button: request.button ?? "left")
             case "advance_feed":
                 try await advanceFeed(items: request.dy ?? 1, wheelPerItem: request.steps ?? 120,
                                       mode: request.profile ?? "swipe")
@@ -332,6 +367,7 @@ public final class OpenIPhoneUseController: ObservableObject {
                 let ux = previous.unitsX + Int((correction.x * Double(span.width)).rounded())
                 let uy = previous.unitsY + Int((correction.y * Double(span.height)).rounded())
                 try await movePointerToUnits(x: ux, y: uy)
+                try await correctPointerAim(previous.x, previous.y)
                 try await hid.click(button: "left")
                 return await verified(request, "One bounded correction sent using the supplied observed landing. Inspect UI outcome; calibration unchanged.", commandID: commandID)
             case "toggle_playback":
@@ -500,8 +536,10 @@ public final class OpenIPhoneUseController: ObservableObject {
         let wire = ScreenshotFrameWire(frameID: frame.frameID, capturedAt: frame.capturedAt,
                                        ageMilliseconds: age,
                                        captureActive: age <= maximumFrameAgeMilliseconds && storeActive,
-                                       mimeType: "image/jpeg", base64: frame.jpeg.base64EncodedString())
-        return BrokerResponse(requestID: request.requestID, ok: true, message: message,
+                                       mimeType: "image/jpeg", jpeg: frame.jpeg)
+        let settleHint = ["swipe", "advance_feed", "scroll"].contains(request.operation)
+            ? " UI may still be animating; take a fresh screenshot before targeting." : ""
+        return BrokerResponse(requestID: request.requestID, ok: true, message: message + settleHint,
                               commandID: commandID, frame: wire)
     }
 

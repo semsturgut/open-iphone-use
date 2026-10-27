@@ -1,76 +1,68 @@
-# Current architecture
+# Architecture
 
-Open iPhone Use runs on a Mac and controls one paired iPhone. The Mac app owns Bluetooth,
-local screen reception and action serialization. Its bundled helper exposes standard MCP
-stdio tools to a model-capable client. No standalone service or provider adapter is needed.
+The headless Python service owns HTTP/TLS, enrollment, screen stores, pairing association,
+calibration, per-device input queues, web controls, CLI and MCP. Swift remains the macOS
+native radio and the optional native app. Linux and Windows use real OS peripheral APIs.
 
 ```mermaid
-sequenceDiagram
-    participant O as Owner
-    participant I as iPhone
-    participant M as Mac app
-    participant C as MCP client / agent
-    O->>I: Pair, enable AssistiveTouch, approve sharing
-    I->>M: HTTPS JPEG over private Wi-Fi
-    C->>M: ensure_session through bundled MCP helper
-    M-->>C: Current frame and session status
-    C->>M: One action
-    M->>I: Bluetooth keyboard / pointer reports
-    I->>M: Fresh screen image
-    M-->>C: Result and image to inspect
+flowchart LR
+    I[Many owner-approved iPhone shares] -->|Per-device HTTPS credentials| P[Python service]
+    U[Loopback operator grid] -->|Local client and Host/Origin checks| P
+    A[MCP client] --> C[Portable stdio CLI]
+    C --> P
+    P --> D[Device registry / frames / queues / calibration]
+    D --> R[One shared host radio]
+    R --> M[CoreBluetooth Swift helper]
+    R --> L[BlueZ D-Bus peripheral]
+    R --> W[WinRT GATT peripheral]
+    M -->|Explicit central| I
+    L -->|Per-peer FD / guarded adapter| I
+    W -->|Explicit subscribed client| I
 ```
 
-## Mac processes
+Python 3.11+ keeps session/action logic portable; Pillow provides the measured calibration
+board/pointer gate, cryptography manages a private CA/renewed leaf certificates, and tomlkit
+preserves Codex configuration during installer registration. Platform-specific imports are
+lazy. macOS uses a native Swift helper over a same-user Unix socket, Linux uses dbus-fast,
+and Windows uses native PyWinRT projections in an owned MTA asyncio loop.
 
-- `OpenIPhoneUseMac`: SwiftUI onboarding/preview, CoreBluetooth HID peripheral, HTTPS
-  receiver, calibration and serialized action execution.
-- `open-iphone-use-mcp`: official Swift MCP SDK over stdio. It forwards requests through a
-  same-user Unix socket; it neither advertises Bluetooth nor exposes a network listener.
-- Support directory: `~/Library/Application Support/Open iPhone Use`. The local token,
-  certificate private keys and same-user socket belong to this installation.
+The `radio.peers/send/release/close` boundary sends report ID + bytes to a concrete native
+peer. It never encodes an implicit current phone. `Control` wraps a radio with one device's
+calibration, frame waits, pointer/keyboard state, stop generation and pairing binding.
+Capture uploads/tap/hover feedback stay concurrent with actions waiting for new images.
+The registry adds separate credentials, bounded action acceptance and stale/foreign frame
+checks. Preparation and actions serialize only per device; no global association/calibration
+lock is held. The owner selects an exact live HID peer before a device/capture link exists.
+The binding is persistent and immutable: stopping a share never transfers it to another
+phone. Unbound legacy records cannot emit input. Calibration clicks require a measured
+board and visible pointer; HID acceptance does not establish the resulting UI behavior.
 
-MCP clients register their own executable path once. New chats receive the workflow
-through MCP initialization. The model must support screenshots and follow the supplied
-inspect/action/inspect contract. No model or AI key is embedded in Open iPhone Use.
+TLS capture and the operator grid are separate listener roles: LAN HTTPS serves capture
+and scoped capture APIs, a loopback HTTP listener avoids desktop certificate installation,
+and an HTTP bootstrap endpoint serves only public CA bytes. Operator access is trusted only on the loopback listener with local clients and Host/Origin
+checks. The LAN listener accepts per-device capture tokens, never operator requests. CLI/MCP discover the loopback
+connection from private state rather than requiring manual URL/CA configuration.
 
-## Capture sources
+## Native service details
 
-The default demo uses the HTTPS Safari page served by the Mac. The owner approves
-screen capture. Its upload responses carry the current capture rate, calibration-board
-state/epoch and page version. Keep Safari visible for calibration; compatible mapping
-is reused when switching apps. The page's keep-alive behavior has been tested on one
-phone, but iOS can still pause or end capture.
+- macOS: one CoreBluetooth manager and HID service; independent central subscriptions,
+  FIFO queues, last-report state, readiness-driven backpressure/cancellation and targeted release. The old single-phone Swift
+  controller remains intact for standalone-app compatibility and legacy checks.
+- Linux: exported ObjectManager/service/characteristic/descriptor tree, encrypted HOGP,
+  connectable advertising, owner-confirmed pairing, and per-peer acquired notification
+  sockets. Shared-notify fallbacks refuse ambiguity and require one central per adapter.
+- Windows: peripheral capability checks, encrypted GATT service/attributes, deferred
+  read/write handlers, native event cleanup and explicit subscriber notification results.
 
-## Local HTTP contract inside HTTPS
+All three implementations exist. Linux/Windows and the new physical multi-phone control
+path are not yet hardware-verified. Radio/OS limits are operational constraints, not
+features that software can promise away. [Platform setup](headless-server.md).
 
-The receiver listens on private Wi-Fi IPv4 port 27890 and checks the connecting subnet.
-The capture page uses the installation token in its link; API calls use
-`X-Open iPhone Use-Token`. Other than the capture page, no credential is passed in a query.
 
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /capture?token=…` | Owner-facing sharing page |
-| `POST /api/frame` | Bounded JPEG; returns server frame ID/time and page controls |
-| `GET /api/status` | Authenticated capture status |
-| `POST /api/stop` | Mark capture inactive and release input through the watchdog |
-| `POST /api/calibrate` | Read-only readiness check, or explicit serialized preparation |
-| `POST /api/tap` | Calibration-board landing feedback, not an input command |
+## CLI-only distribution
 
-Only the newest JPEG stays in Mac memory. Frame IDs/time retained for age guards do
-not retain older images. Input requires live capture no older than five seconds.
-The private receiver is not a remote MCP endpoint and does not expose arbitrary app commands.
-
-## Input and verification
-
-The phone sees keyboard and relative-pointer HID reports. Absolute screen fractions are
-mapped through a calibration bound to device identity, aspect, profile and motion version.
-Automatic preparation measures two board clicks without searching profiles. The result
-is a two-point estimate, not a full-screen accuracy guarantee. Models reuse it through
-`ensure_session`; changes to pointer settings can require explicit `prepare_session`.
-
-Lists use `scroll`; full-screen video uses centered press/drag/release `advance_feed`.
-Input is serialized. Stop cancels queued work and attempts to release all held keys and
-buttons. A newer frame is returned after actions, but an unfinished transition can require
-another screenshot. Never infer success from BLE acceptance alone. See [feed control](feed-control.md).
-
-Read [security](../SECURITY.md) and [device checks](device-matrix.md) for practical boundaries.
+setup.sh/setup.ps1 install the Python CLI and platform-native HID implementation; macOS
+builds the headless Swift helper. There is no application-bundle/disk-image build path.
+The legacy Swift stdio helper remains for protocol compatibility tests. Session preparation
+uses its own delayed-frame observations; other input uses a bounded two-second frame-ID
+ring. Image waits and control queues are per device.

@@ -1,231 +1,116 @@
-<div align="center">
-
 # Open iPhone Use
 
-**Give your AI agent a real iPhone to use.**
+Control your own iPhones with a local CLI server, Bluetooth HID, Safari screen sharing and an
+image-capable MCP agent. Multiple phones can run at once, each with its own input queue,
+frames and calibration. The server contains no model or AI API key.
 
-Your Mac becomes a Bluetooth keyboard and mouse. Your iPhone shares its screen over
-Wi-Fi. Connect the two to any image-capable MCP agent.
+The **macOS app and DMG are deprecated and removed**; use the CLI. The `macos/` Swift
+package supplies the headless Bluetooth HID helper used on macOS and retains a legacy MCP
+compatibility test surface.
 
-[Download 0.0.2](https://github.com/semsturgut/open-iphone-use/releases) ·
-[Website](https://semsturgut.github.io/open-iphone-use/) ·
-[Setup](#get-started) · [How it works](#how-it-works) · [Roadmap](ROADMAP.md)
+## Quick start
 
-**macOS · Apple Silicon · MCP · Apache-2.0 · Experimental 0.0.2**
-
-![Open iPhone Use connected to an iPhone](docs/media/app-connected.png)
-
-</div>
-
-## Requirements
-
-- **Just an iPhone and an Apple Silicon Mac or MacBook.** No additional hardware needed.
-- **No app installation on your iPhone.** Open the sharing link in Safari.
-- Bluetooth enabled and both devices on the same trusted private Wi-Fi.
-- An image-capable MCP client to connect your AI agent.
-
-**Download the macOS DMG to get started** — the Mac app includes the local receiver
-and MCP server. No separate server installation is needed. Follow the
-[one-time setup](#get-started) to pair the phone, approve screen sharing and connect your agent.
-
-**Windows and Linux support are on the [roadmap](ROADMAP.md).** The current binary
-supports Apple Silicon macOS only.
-
-## See it work
-
-https://github.com/user-attachments/assets/9faccc34-7bd1-4714-a1a4-e8bb747bfb53
-
-The demo searches Instagram in English for food, opens a cooking video, watches it,
-advances to another video, and likes a food video. Actions go through the bundled MCP
-server and Bluetooth HID; the Mac window shows live iPhone screen frames. No iPhone
-Mirroring, deep-link navigation or simulated phone UI is used.
-
-## How it works
-
-```mermaid
-flowchart LR
-    I[iPhone screen sharing] -->|HTTPS over private Wi-Fi| M[Open iPhone Use on Mac]
-    M -->|Screenshot through MCP| A[Your AI agent]
-    A -->|Keyboard / pointer / gesture tools| M
-    M -->|Bluetooth HID keyboard + mouse| I
-```
-
-Open iPhone Use supplies the screen and input tools. Your MCP client supplies the model.
-No separate server or model API key is needed in the Mac app. If your client uses a
-remote model, it may send screenshots to that provider; this is not a claim of local inference.
-
-Use any MCP client that supports images and tool use. **GPT-6 Luna, Claude Haiku 5.5,
-or newer models with strong vision/computer-use skills are recommended starting points**
-when available in your client. Model selection is our practical recommendation, not a
-compatibility guarantee or vendor endorsement. [OpenAI model capabilities](https://developers.openai.com/api/docs/models),
-[Claude model information](https://www.anthropic.com/news/models).
-
-## Get started
-
-### 1. Install and open the Mac app
-
-Download the **macOS arm64 DMG** from [Releases](https://github.com/semsturgut/open-iphone-use/releases),
-open it, and drag **Open iPhone Use.app** into **Applications**. Keep the app open.
-Its Bluetooth radio and private Wi-Fi receiver start automatically.
-
-With the DMG still open, run **Install Open iPhone Use.command** once. It installs the
-`open-iphone-use` CLI and shared agent skill, then registers the MCP server globally in any
-detected OpenCode and DeepSeek Harness desktop profile. Restart those clients if they were
-already open. For a manual install, run
-`/Applications/Open iPhone Use.app/Contents/Helpers/open-iphone-use install`.
-
-0.0.2 is a **development-signed, non-notarized alpha**, not a Developer ID
-notarized release. macOS may block it. Review the source and build it yourself if you
-cannot approve experimental software under your security policy. The supplied DMG
-supports Apple Silicon; Intel, Linux and Windows binaries are not provided yet.
-
-![Mac setup screen](docs/media/mac-setup.png)
-
-### 2. Pair the iPhone as a keyboard and pointer
-
-Allow the Mac app's Bluetooth prompt. On the iPhone, enable **Settings → Accessibility →
-Touch → AssistiveTouch**. Under **Devices → Bluetooth Devices**, choose **Open iPhone Use**
-and approve pairing. Keep your iPhone unlocked. This is a Bluetooth HID connection:
-the phone sees a keyboard and mouse, not a remote desktop app.
-
-### 3. Share the screen over Wi-Fi
-
-Keep the Mac and iPhone on the same trusted private Wi-Fi. In the Mac app:
-
-1. Use **Share root certificate** to transfer the public certificate through a trusted
-   channel such as AirDrop.
-2. On iPhone install the certificate and explicitly enable trust under **Settings →
-   General → About → Certificate Trust Settings**. This is an owner action.
-3. Use **Copy link** or **Share** to open the app's capture link in iPhone Safari.
-4. Tap **Start sharing** and approve iOS's screen-sharing prompt.
-
-The capture link is private. The Mac masks its token on screen; never publish the copied
-link. Keep Safari visible for first calibration. iOS can pause/end capture, and only the
-owner can approve sharing again. The iPhone needs no app installation: its built-in
-Safari opens the Mac's sharing page.
-
-### 4. Connect your agent through MCP
-
-The DMG installer connects OpenCode and DeepSeek Harness automatically when installed.
-For another MCP client, register the bundled executable as a **stdio** server:
-
-```text
-/Applications/Open iPhone Use.app/Contents/Helpers/open-iphone-use-mcp
-```
-
-Example JSON configuration (adapt the container key to your client):
-
-```json
-{
-  "mcpServers": {
-    "open-iphone-use": {
-      "command": "/Applications/Open iPhone Use.app/Contents/Helpers/open-iphone-use-mcp"
-    }
-  }
-}
-```
-
-Reconnect the MCP server after installation/upgrades so the client refreshes its tools.
-The Mac app must be running. No repository working directory or model-provider key is
-required. Registration is per client, then available in that client's new chats. MCP
-instructions and the installed agent skill tell the agent to use these tools when you ask
-it to do something on the paired iPhone, even if you do not name the product. The
-client/model must expose MCP tools, load server instructions or agent skills, and support
-image-based tool use.
-
-The `open-iphone-use` CLI can also check or configure clients:
+From a reviewed checkout on macOS or Linux:
 
 ```sh
-open-iphone-use status
-open-iphone-use setup --all
+sh setup.sh
+open-iphone-use serve
 ```
 
-### 5. Let it calibrate, then give it a task
+On Windows:
 
-Ask, for example: **“On my iPhone, open Instagram and search for easy dinner recipes.”**
-The MCP workflow starts with `ensure_session`. If needed, it opens a white calibration
-board, moves to two points and measures **two clicks**. There is no lengthy profile scan.
-Keep the sharing page visible until it finishes. Compatible calibration is then reused
-across chats without moving away from your current app.
+```powershell
+.\setup.ps1
+open-iphone-use serve
+```
 
-![Real two-click calibration board](docs/media/calibration.png)
+Setup installs a managed runtime and the `open-iphone-use` CLI. It registers MCP for detected
+Codex, Claude Code, Cursor, OpenCode and Command Code clients, and installs the agent skill
+at `~/.agents/skills/open-iphone-use`; detected Claude Code and Command Code clients get
+aliases to it (Windows can use a junction or copy fallback). Restart clients after setup.
+Run `open-iphone-use register-agents` to register clients installed later. macOS needs Swift 6;
+see [installation](docs/installation.md) for platform dependencies and options.
 
-The result is a two-point estimate, not guaranteed accuracy at every pixel. Calibration
-is bound to the paired phone, aspect, motion profile and version. Changing pointer
-settings or phone can require recalibration. It stops before pressing if it cannot see
-the pointer safely inside the board.
+`serve` runs headless in the background; use `open-iphone-use serve --foreground` for
+debugging and `open-iphone-use stop` to stop it. It is not a login or reboot service.
+Open the Web UI at **http://127.0.0.1:27893**: it is loopback-only and needs no token.
+Any local process can operate it, so do not expose it through a proxy. Each device card
+shows independent green/red Bluetooth and screen-sharing lights, a live thumbnail and
+frame age.
 
-### 6. Check the connected view
+![Local web UI with two iPhone cards, status lights, live thumbnails and sharing controls](docs/media/web-ui.png)
 
-The Mac window shows **Live**, the received iPhone screen and frame age. After every
-action, the agent inspects a new image before continuing. Your phone remains under your
-control; screen lock and protected content are not bypassed.
+## Pair and share each iPhone
 
-![Live connected view](docs/media/app-connected.png)
+1. Unlock the iPhone, enable AssistiveTouch, then pair the host under **Settings →
+   Accessibility → Touch → AssistiveTouch → Devices → Bluetooth Devices**. Approve the
+   owner's pairing prompts. Both keyboard and pointer HID subscriptions must be connected.
+2. Choose the connected phone in the Web UI or run `open-iphone-use new` (`add` is an
+   alias). `open-iphone-use bluetooth` lists candidates; `new --bt PEER_ID` selects an exact
+   peer. Bluetooth supplies owner device names where available; generic or duplicate names
+   get fallbacks. Do not infer identity from a name.
+3. Each phone gets a private sharing link and QR. Use Copy or, where supported, Share and
+   the system share sheet (including AirDrop where available). On first use install the
+   public CA on the phone, verify its SHA-256 fingerprint against the terminal, and enable
+   trust in **Settings → General → About → Certificate Trust Settings**. Open that phone's
+   link in Safari and approve **Start sharing**. Repeat for each phone.
 
-For Reels/Shorts, the agent uses `advance_feed`: press, drag, release, then verify the
-account/title changed. Normal lists use `scroll`. [Feed control](docs/feed-control.md).
-
-## Difference with iPhone Mirroring
-
-| | Open iPhone Use | Apple's iPhone Mirroring |
-| --- | --- | --- |
-| Purpose | Give MCP agents screen and input tools | Interact with iPhone apps from a Mac |
-| Input | Mac advertises as Bluetooth HID keyboard/mouse | Apple's integrated mirroring/control feature |
-| Screen | Owner-approved sharing to a local HTTPS receiver over Wi-Fi | Apple's built-in wireless mirroring |
-| Phone state | Unlocked phone and active sharing required | iPhone stays locked during mirroring |
-| Account | No Apple Account sign-in in this app | Same Apple Account with two-factor authentication required |
-| Agent interface | Bundled standard MCP stdio server | No MCP server supplied by this project for Apple's feature |
-| Platforms today | Experimental Apple Silicon Mac build | Supported Apple hardware/macOS/iOS combinations |
-
-We do not call or wrap iPhone Mirroring. Apple's implementation also uses Wi-Fi and
-Bluetooth; the distinction is the HID + owner-approved capture + MCP architecture, not
-an assertion that Apple's feature lacks keyboard/mouse interaction. Apple's current
-requirements and behavior are documented in [Apple's guide](https://support.apple.com/en-us/120421).
-
-## Current evidence and limits
-
-On one paired 750×1334 portrait iPhone, two-click preparation took 3.53 seconds and
-compatible reuse 79 ms. Two independent board targets had a worst-axis miss of 1.22%.
-Reels and Shorts passed six inspected next/previous gestures. These are limited physical
-observations, not benchmarks or proof on every iPhone. [Device checks](docs/device-matrix.md).
-
-Text currently uses supported US-layout ASCII. No multi-touch, automatic unlock,
-permission approval or protected-screen bypass is provided. Stale capture blocks input.
-Inspect each resulting screen; HID delivery alone is not proof of UI success.
-
-## Build from source
+The capture page requests video at an ideal **30 fps**; actual delivery depends on the
+phone and network. Capture links are credentials: keep them private. Only the owner pairs,
+trusts certificates, unlocks the phone and approves sharing. Bluetooth and fresh screen
+sharing are both required for control.
 
 ```sh
-git clone https://github.com/semsturgut/open-iphone-use.git
-cd open-iphone-use/macos
-swift test
-./build-app.sh
+open-iphone-use devices                    # list registered phones
+open-iphone-use status --device DEVICE_ID  # inspect a phone
+open-iphone-use link DEVICE_ID             # show its link and QR again
+open-iphone-use remove DEVICE_ID           # remove phone and revoke its link
+open-iphone-use stop
 ```
 
-The default source-build destination is `~/Applications/Open iPhone Use.app`.
-Use that installation's helper path when configuring MCP. To build the DMG:
+`remove --device DEVICE_ID` is also supported. Removal cancels that phone's input and clears
+its frames and calibration; it does not remove its OS Bluetooth bond. See
+[headless server](docs/headless-server.md) for reconnect and network details.
 
-```sh
-./build-dmg.sh
-```
+## Pointer and MCP
 
-Xcode 26.2 (including its SDK and Swift toolchain) and macOS are required to build from source. [Mac development](macos/README.md),
-[contributing](CONTRIBUTING.md), [architecture](docs/architecture.md), [security](SECURITY.md).
+The default auto-hiding AssistiveTouch pointer is supported. With Safari sharing visible,
+preparation measures seven samples on its calibration board and fits the visual pointer;
+a good fit is accepted immediately, while a poor fit is remeasured once. Compatible
+calibration is reused. Explicitly recalibrate with `ensure_session` or `prepare_session`
+using `recalibrate=true`, or Safari's **Calibrate pointer** button. After a failed automatic
+attempt, another automatic attempt can be made after three minutes; a failed explicit attempt
+preserves the stored mapping. Keep pointer appearance, tracking speed, Zoom and orientation
+stable.
 
-## Roadmap
+Coordinate taps use bounded corrections and learn consistent landing offsets. Results report
+whether the landing was visually verified, observed without verification, predicted, or blind;
+predicted and blind results are unverified. A tap is refused when an observed landing is over 3% off target, a hidden
+corrected pointer is predicted over 1% off, or an unseen pointer has untrusted calibration.
+Even a verified landing does not prove the intended UI changed: inspect the screen after
+**every action**.
 
-- **Linux and Windows builds** — planned, not implemented.
-- **ESP32 support** — planned standalone Bluetooth HID control; target is an iPhone and
-  ESP32 with no Mac/computer needed during use.
-- **Raspberry Pi support** — planned compact host for screen capture, MCP and device
-  control without a Mac/PC in the setup.
-- **Multi-iPhone support** — planned; the current bridge controls one paired phone.
-- Clean-machine compatibility tests, reconnect handling and a signed/notarized release.
+The portable MCP server exposes:
 
-See [ROADMAP.md](ROADMAP.md). This repository starts with a new clean history for Open
-iPhone Use; private development history and credentials are not included.
+- Device setup and status: `list_bluetooth_candidates`, `create_device`, `remove_device`,
+  `list_devices`, `get_device_status`, `get_latest_screenshot`, `stop_control`.
+- Preparation and pointer: `ensure_session`, `prepare_session`, `pointer_quick_probe`,
+  `pointer_home`, `pointer_move`, `pointer_tap`, `move_pointer`, `click`, `set_page_board`.
+- Input and navigation: `type_text`, `send_key`, `scroll`, `swipe`, `advance_feed`.
 
-## License
+Select an explicit device and inspect its screenshot. Preparation takes its own fresh frames;
+other input requires a frame ID captured after that phone's last input, at most 120 seconds
+old, while screen sharing remains active with a frame received within five seconds. Results
+include image dimensions; coordinates are fractions of the full image. Input is serialized
+per device and released on cancellation. Stale frames and unavailable control are rejected;
+HID delivery alone does not establish UI success. Text uses the US ASCII layout, and iOS
+permissions, protected content and locking remain in force.
 
-[Apache License 2.0](LICENSE). Not affiliated with Apple, OpenAI, Anthropic or Instagram.
+macOS has been tested with an iPhone. Linux/BlueZ and Windows/WinRT backends exist and should
+work in principle, but have **not been tested on real hardware**; reports and pull requests
+are welcome. On macOS, two iPhones have been shared and connected at the same time, and a
+paired iPhone reconnected over Bluetooth within a few seconds after a server restart. See the
+[validation record](docs/web-server-validation.md) for what was actually tested.
+
+Read the [changelog](CHANGELOG.md), [documentation](docs/), and
+[contributing guide](CONTRIBUTING.md).

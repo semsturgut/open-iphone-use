@@ -1,9 +1,9 @@
 name: Mac bridge
 on:
   push:
-    paths: ['macos/**', '.github/workflows/macos.yml']
+    paths: ['macos/**', 'server/**', 'setup.sh', 'setup.ps1', '.github/workflows/macos.yml']
   pull_request:
-    paths: ['macos/**', '.github/workflows/macos.yml']
+    paths: ['macos/**', 'server/**', 'setup.sh', 'setup.ps1', '.github/workflows/macos.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,8 +22,15 @@ jobs:
         with:
           node-version: '22'
       - run: swift test
-      - run: swift build -c release
       - run: node scripts/test-capture-page.mjs
-      - run: python3 scripts/test-agent-mcp.py .build/release/open-iphone-use-mcp
-      - name: Build development app bundle
-        run: ./build-app.sh "$RUNNER_TEMP/OpenIPhoneUse.app"
+      - run: python3 scripts/test-agent-mcp.py .build/debug/open-iphone-use-mcp
+      - name: Build managed CLI runtime through setup
+        env:
+          OIU_INSTALL_ROOT: ${{ runner.temp }}/oiu-runtime
+          OIU_BIN_DIR: ${{ runner.temp }}/oiu-bin
+          OIU_SOURCE_DIR: ${{ github.workspace }}
+        run: sh ../setup.sh --no-agents
+      - name: Portable server tests
+        run: |
+          "$RUNNER_TEMP/oiu-runtime/venv/bin/python" -m pip install 'dbus-fast>=5.2,<6'
+          PYTHONPATH=../server "$RUNNER_TEMP/oiu-runtime/venv/bin/python" -m unittest discover -s ../server/tests -v

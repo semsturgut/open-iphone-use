@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const html = fs.readFileSync(new URL('../Sources/OpenIPhoneUseCore/Resources/capture.html', import.meta.url), 'utf8');
+assert.equal(html, fs.readFileSync(new URL('../../server/oiu/web/capture.html', import.meta.url), 'utf8'));
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 const listeners = () => ({ handlers: {}, addEventListener(name, cb) { this.handlers[name] = cb; }, removeEventListener(name) { delete this.handlers[name]; } });
@@ -29,6 +30,7 @@ const headline = element();
 const hint = element();
 const dot = element();
 const board = element();
+board.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 800 });
 const boardHits = element();
 const status = element();
 
@@ -38,7 +40,10 @@ const silentTrack = { kind: 'audio', readyState: 'live', stop() {} };
 const audioTrack = { kind: 'audio', readyState: 'live', stop() {} };
 const videoTrack = { kind: 'video', readyState: 'live', muted: false, handlers: {}, addEventListener(n, cb) { this.handlers[n] = cb; }, stop() {} };
 
-let videoFrameCallback, intervalCallback, heldResponse, holdNextFrame = false;
+let videoFrameCallback, intervalCallback, heldResponse, holdNextFrame = false, failCalibration = false;
+let intervalDelay, rejectConstraint;
+const displayConstraints = [];
+let nextTimer = 0; const timers = new Map();
 let nowMs = 1_700_000_000_000;
 const tick = ms => { nowMs += ms; };
 class FakeDate extends Date {
@@ -82,9 +87,10 @@ class FakeAudioContext {
   close() { audio.closed += 1; this.state = 'closed'; return Promise.resolve(); }
 }
 
+const fakeWindow = { ...listeners(), AudioContext: FakeAudioContext, innerWidth: 400, innerHeight: 800 };
 vm.runInNewContext(script, {
   document,
-  window: { ...listeners(), AudioContext: FakeAudioContext, innerWidth: 400, innerHeight: 800 },
+  window: fakeWindow,
   location: { search: '?token=test' },
   navigator: {
     wakeLock: { async request(kind) {
@@ -93,7 +99,11 @@ vm.runInNewContext(script, {
     } },
     mediaDevices: {
       async getDisplayMedia(constraints) {
+        displayConstraints.push(constraints);
         audio.requestedAudio.push(constraints.audio);
+        if (rejectConstraint && constraints.video !== true) {
+          const error = new Error('Unsupported frame rate'); error.name = rejectConstraint; throw error;
+        }
         // iOS returns no audio track for display capture, like the real device.
         return { getVideoTracks: () => [videoTrack], getAudioTracks: () => [], getTracks: () => [videoTrack] };
       },
@@ -110,11 +120,12 @@ vm.runInNewContext(script, {
     getAudioTracks() { return this.tracks.filter(t => t.kind === 'audio'); }
     getTracks() { return this.tracks; }
   },
-  setInterval(cb) { intervalCallback = cb; return 1; }, clearInterval() { intervalCallback = null; },
-  setTimeout() { return 2; }, clearTimeout() {},
+  setInterval(cb, delay) { intervalCallback = cb; intervalDelay = delay; return 1; }, clearInterval() { intervalCallback = null; },
+  setTimeout(cb, delay) { const id = ++nextTimer; timers.set(id, { cb, delay }); return id; },
+  clearTimeout(id) { timers.delete(id); },
   async fetch(path, options) {
     requests.push({ path, options });
-    if (path === '/api/calibrate') return { ok: true, async json() { return { ok: true, message: 'Ready' }; } };
+    if (path === '/api/calibrate') return { ok: true, async json() { return failCalibration ? { ok: false, message: 'Calibration failed: keep Safari visible' } : { ok: true, message: 'Ready' }; } };
     if (path === '/api/frame' && holdNextFrame) {
       holdNextFrame = false;
       return new Promise(resolve => { heldResponse = resolve; });
@@ -132,6 +143,8 @@ assert.equal(landing.classList.contains('off'), false, 'the landing screen start
 assert.equal(live.classList.contains('on'), false, 'the live section starts hidden');
 
 await start.handlers.click();
+assert.equal(displayConstraints[0].video.frameRate.ideal, 30);
+assert.equal(intervalDelay, 16, 'fallback ticks must support 30 FPS and server rate changes');
 assert.equal(wake.requested, 1, 'sharing requests a screen wake lock when supported');
 assert.equal(audio.requestedAudio[0], false,
   'display capture must never ask for audio: a live microphone session stops other apps from autoplaying videos');
@@ -244,13 +257,26 @@ heldResponse({ ok: true, async json() { return { frameID: 'open', fps: 1, boardE
 await openTick;
 assert.equal(board.classList.contains('on'), true, 'a further epoch must reopen the board');
 
-// The board catches taps and reports them as screen fractions.
+// Board-local fractions are mapped into screen fractions by the receiver.
 board.handlers.pointerdown({ clientX: 100, clientY: 400 });
 await flush();
 const tap = requests.filter(r => r.path === '/api/tap').at(-1);
 assert.ok(tap, 'a tap on the board must be reported to the Mac');
-assert.deepEqual(JSON.parse(tap.options.body), { x: 0.25, y: 0.5 }, 'the tap must be a screen fraction');
+assert.deepEqual(JSON.parse(tap.options.body), { x: 0.25, y: 0.5, geometry: {client: {x:100,y:400}, board: {left:0,top:0,width:400,height:800}, visualViewport:null} }, 'tap reports fractions and DOM geometry');
 assert.equal(JSON.parse(status.textContent).board, true, 'the status must say the board is up');
+fakeWindow.visualViewport = {offsetLeft: 3, offsetTop: 11, width: 320, height: 640, scale: 1.5};
+board.getBoundingClientRect = () => ({ left: 20, top: 80, width: 320, height: 640 });
+board.handlers.pointerdown({ clientX: 100, clientY: 400 });
+await flush();
+assert.deepEqual(JSON.parse(requests.filter(r => r.path === '/api/tap').at(-1).options.body),
+  { x: 0.25, y: 0.5, geometry: {client: {x:100,y:400}, board: {left:20,top:80,width:320,height:640}, visualViewport:{offsetLeft:3,offsetTop:11,width:320,height:640,scale:1.5}} }, 'Safari viewport offsets/zoom must not change board-local tap fractions');
+const leases = [...timers.values()].filter(timer => timer.delay === 10000);
+assert.equal(leases.length, 1, 'an open board has one renewable lease');
+leases[0].cb();
+assert.equal(board.classList.contains('on'), false, 'a stalled server must close the board locally');
+assert.match(hint.textContent, /Calibration interrupted/);
+
+
 
 video.paused = true;
 const playsBefore = video.plays;
@@ -267,6 +293,14 @@ assert.equal(JSON.parse(requests.filter(r => r.path === '/api/calibrate').at(-1)
 board.classList.add('on');
 boardBack.handlers.click();
 assert.equal(board.classList.contains('on'), false, 'the Back button must close the board again');
+board.classList.add('on');
+failCalibration = true;
+calibrateButton.handlers.click();
+await flush();
+assert.equal(board.classList.contains('on'), false, 'failed calibration closes the board immediately');
+assert.match(hint.textContent, /Calibration failed/);
+failCalibration = false;
+
 
 stop.handlers.click();
 assert.equal(intervalCallback, null);
@@ -276,3 +310,33 @@ assert.equal(audio.closed, 1, 'stopping the share must close the audio session')
 assert.equal(board.classList.contains('on'), false, 'stopping the share must close the board');
 assert.equal(JSON.parse(requests.at(-1).options.body).reason, 'stopped');
 console.log('Landing-to-board flow, audio keep-alive, background continuation, board epochs, taps and stop checks passed');
+
+// Safari constraint rejection falls back without audio, and the fallback timer obeys
+// updated rates while allowing only one upload in flight.
+for (const name of ['TypeError', 'OverconstrainedError']) {
+  rejectConstraint = name;
+  const before = displayConstraints.length;
+  await start.handlers.click();
+  assert.equal(displayConstraints[before].video.frameRate.ideal, 30);
+  assert.equal(displayConstraints[before + 1].video, true);
+  assert.equal(displayConstraints[before + 1].audio, false);
+  holdNextFrame = true;
+  tick(1000);
+  const pending = intervalCallback();
+  await flush();
+  const uploads = frameRequests().length;
+  tick(34);
+  await intervalCallback();
+  assert.equal(frameRequests().length, uploads, 'never overlap uploads');
+  heldResponse({ ok: true, async json() { return { fps: 30 }; } });
+  await pending;
+  tick(34);
+  await intervalCallback();
+  assert.equal(frameRequests().length, uploads + 1, '30 FPS reply must allow the next upload after 34ms');
+  tick(34);
+  await intervalCallback();
+  assert.equal(frameRequests().length, uploads + 1, 'a 1 FPS reply must reduce the upload rate');
+  stop.handlers.click();
+}
+assert.ok(audio.requestedAudio.every(value => value === false));
+console.log('30 FPS capture, constraint fallback, dynamic rate gating and serialized uploads passed');

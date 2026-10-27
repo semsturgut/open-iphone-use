@@ -62,16 +62,16 @@
 <main>
   <section class="landing" id="landing">
     <h1>Open iPhone Use</h1>
-    <p>Share this iPhone's screen with your Mac so the agent can see it and act on it.</p>
+    <p>Share this iPhone's screen with this server so the agent can see it and act on it.</p>
     <button id="start">Start sharing</button>
-    <p class="fine">The screen stays visible to your Mac while you share. Stop it from the iOS
+    <p class="fine">The screen stays visible to this server while you share. Stop it from the iOS
       broadcast indicator when you are done. Nothing is recorded, and the microphone stays off,
       so videos keep autoplaying in other apps.</p>
   </section>
 
   <section class="live" id="live">
     <div class="line"><span class="dot" id="dot"></span><span id="headline">Sharing</span></div>
-    <p class="fine" id="hint">Ready. The Mac checks calibration when sharing starts.</p>
+    <p class="fine" id="hint">Ready. Start a task or use Calibrate pointer to prepare control.</p>
     <div class="row">
       <button class="secondary" id="stop">Stop sharing</button>
       <button class="secondary" id="calibrate">Calibrate pointer</button>
@@ -115,6 +115,7 @@
 <script>
 (() => {
   const token = new URLSearchParams(location.search).get('token') || '';
+  let pairEpoch = '', lastHover = 0;
   const startButton = document.querySelector('#start');
   const stopButton = document.querySelector('#stop');
   const calibrateButton = document.querySelector('#calibrate');
@@ -134,9 +135,9 @@
   let audioContext = null, silentOscillator = null, silentGain = null, silentDestination = null;
   let inFlight = null, pendingStop = Promise.resolve();
   let lastUploadAt = 0, tapCount = 0, calibrationRequested = false;
-  let wakeLock = null, calibrationMessage = '';
+  let wakeLock = null, calibrationMessage = '', boardLease = null;
   // The Mac publishes the upload rate and asks for the board with every accepted frame.
-  let framesPerSecond = 1;
+  let framesPerSecond = 30;
   // Only a distinct Mac request changes the board; manual toggles survive repeated frames.
   let lastMacEpoch = null;
 
@@ -223,24 +224,56 @@
       calibrationMessage = result.ok
         ? 'Ready. Pointer calibration checked. You can switch apps; the agent checks each action.'
         : (result.message || 'Calibration unavailable. Try again with this page in front.');
+      if (!result.ok) setBoard(false);
       hint.textContent = calibrationMessage;
-    } catch (error) { if (run === generation) hint.textContent = String(error); }
+    } catch (error) {
+      if (run === generation) { setBoard(false); hint.textContent = String(error); }
+    }
     finally { if (run === generation) calibrateButton.disabled = false; }
   }
 
+  document.querySelector('#board').addEventListener('pointermove', (event) => {
+    if (event.pointerType !== 'mouse') return;
+    if (!pairEpoch || Date.now() - lastHover < 100) return;
+    lastHover = Date.now();
+    fetch('/api/pointer', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Open-iPhone-Use-Token': token},
+      body: JSON.stringify({epoch: pairEpoch})}).catch(() => {});
+  });
+
   function reportTap(event) {
-    const x = event.clientX / window.innerWidth;
-    const y = event.clientY / window.innerHeight;
+    // The server maps this visible board rectangle into the captured physical screen.
+    // Layout viewport fractions drift when Safari chrome, page zoom or offsets change.
+    const rect = board.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return;
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
     tapCount += 1;
     boardHits.textContent = `${tapCount} taps · last ${x.toFixed(3)}, ${y.toFixed(3)}`;
     fetch('/api/tap', {
       method: 'POST', cache: 'no-store', keepalive: true,
       headers: { 'Content-Type': 'application/json', 'X-Open-iPhone-Use-Token': token },
-      body: JSON.stringify({ x, y })
+      body: JSON.stringify({ x, y, geometry: {
+        client: {x: event.clientX, y: event.clientY},
+        board: {left: rect.left, top: rect.top, width: rect.width, height: rect.height},
+        visualViewport: window.visualViewport ? {offsetLeft: window.visualViewport.offsetLeft,
+          offsetTop: window.visualViewport.offsetTop, width: window.visualViewport.width,
+          height: window.visualViewport.height, scale: window.visualViewport.scale} : null
+      } })
     }).catch(() => {});
   }
 
+  function renewBoardLease() {
+    clearTimeout(boardLease);
+    boardLease = setTimeout(() => {
+      setBoard(false);
+      calibrationMessage = 'Calibration interrupted: no recent server response. Keep Safari sharing visible and prepare again.';
+      hint.textContent = calibrationMessage;
+    }, 10000);
+  }
+
   function setBoard(on) {
+    if (on) renewBoardLease();
+    else { clearTimeout(boardLease); boardLease = null; }
     if (on === board.classList.contains('on')) return;
     board.classList.toggle('on', on);
     if (on) {
@@ -328,11 +361,12 @@
         },
         body: blob
       });
-      if (!response.ok) throw new Error('Mac receiver returned ' + response.status);
+      if (!response.ok) throw new Error('Screen receiver returned ' + response.status);
       let result = {};
       try { result = await response.json(); } catch {}
       if (run !== generation || controller.signal.aborted) return;
       frameCount += 1;
+      pairEpoch = result.pairEpoch || '';
       if (!calibrationRequested) {
         calibrationRequested = true;
         void requestCalibration(false);
@@ -356,6 +390,7 @@
         lastMacEpoch = result.boardEpoch;
         setBoard(result.boardOpen === true);
       }
+      if (board.classList.contains('on') && result.boardOpen === true) renewBoardLease();
     } catch (error) {
       if (run === generation) status.dataset.error = String(error);
     } finally {
@@ -376,7 +411,12 @@
       // Display capture must never ask for audio. On iOS the only audio this API could
       // capture is the microphone, and a live microphone session makes other apps stop
       // autoplaying their videos. The silent WebAudio session below keeps the page awake.
-      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30 } }, audio: false });
+      } catch (error) {
+        if (!['TypeError', 'OverconstrainedError'].includes(error.name)) throw error;
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      }
       track = stream.getVideoTracks()[0];
       startAudioSession();
       await attachPreview();
@@ -400,7 +440,7 @@
       // and it would cover the screen the owner just started sharing. The Mac asks for it with an
       // epoch when a calibration is actually wanted.
       watchVideoFrames(run);
-      timer = setInterval(sendFrame, Math.max(16, Math.round(500 / framesPerSecond)));
+      timer = setInterval(sendFrame, 16);
       describe();
     } catch (error) { stopShare(String(error)); }
   });

@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <title>Open iPhone Use</title>
+  <style>
+    :root { color-scheme: dark; font: 17px -apple-system, BlinkMacSystemFont, sans-serif; }
+    body { margin: 0; background: #0f1218; color: #f4f5f7; }
+    main { max-width: 560px; margin: 0 auto; padding: 24px 20px 40px; }
+    h1 { font-size: 1.6rem; margin: 0 0 6px; letter-spacing: -0.01em; }
+    p { color: #aeb6c4; line-height: 1.5; margin: 0 0 14px; }
+    button { padding: 16px 20px; border: 0; border-radius: 14px; font-size: 1.05rem; font-weight: 700;
+             color: #08131b; background: #72d6ff; width: 100%; }
+    button.secondary { background: #262d3a; color: #e8ecf3; font-weight: 600; font-size: 0.95rem; padding: 12px 16px; }
+    button:disabled { opacity: 0.45; }
+    label { display: flex; gap: 10px; align-items: flex-start; color: #d6dbe4; font-size: 0.95rem; margin: 14px 0 18px; }
+    label input { margin-top: 3px; width: 20px; height: 20px; flex: none; }
+    .fine { color: #7f889a; font-size: 0.82rem; line-height: 1.45; }
+    .live { display: none; gap: 10px; flex-direction: column; }
+    .live .row { display: flex; gap: 9px; }
+    .live.on { display: flex; }
+    .landing.off { display: none; }
+    .line { display: flex; align-items: center; gap: 8px; color: #8ff0c4; font-size: 0.92rem; font-weight: 600; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #2ee59d; }
+    .dot.paused { background: #ffb454; }
+    details { margin-top: 18px; }
+    summary { color: #7f889a; font-size: 0.82rem; cursor: pointer; }
+    pre { padding: 12px; border-radius: 10px; background: #1a1f29; color: #aeb6c4;
+          font: 12px ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    /* Frames are drawn from this element, so it must exist and keep playing. It is kept at
+       two pixels behind everything instead of being shown as a preview. */
+    #preview { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0.01; pointer-events: none; }
+    /* Calibration board: a white grid the pointer is measured against. It has to be a real
+       element so the taps land somewhere the page can catch them. */
+    #board { position: fixed; inset: 0; display: none; background: #fff; z-index: 10; touch-action: none; }
+    #board.on { display: block; }
+    #board svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #board .hits { position: absolute; left: 50%; bottom: 7%; transform: translateX(-50%);
+      font: 600 14px ui-monospace, monospace; color: #111; text-align: center; }
+    /* The board covers the screen, so it needs its own way out that does not depend on the Mac. */
+    #boardBack { position: absolute; right: 16px; top: calc(env(safe-area-inset-top, 0px) + 16px);
+      width: auto; padding: 11px 18px; border-radius: 12px; background: #111; color: #fff;
+      font-size: 15px; font-weight: 600; }
+    /* The board only covers the page viewport, which is smaller than the screen. These marks
+       make its edges visible in the captured frame, so the mapping from frame coordinates to
+       viewport coordinates is measured rather than assumed. */
+    #board .edge { position: absolute; background: #00e07a; }
+    #board .edge.top { left: 0; right: 0; top: 0; height: 2px; }
+    #board .edge.bottom { left: 0; right: 0; bottom: 0; height: 2px; }
+    #board .edge.left { top: 0; bottom: 0; left: 0; width: 2px; }
+    #board .edge.right { top: 0; bottom: 0; right: 0; width: 2px; }
+    #board .corner { position: absolute; width: 14px; height: 14px; background: #00e07a; }
+    #board .corner.tl { left: 0; top: 0; }
+    #board .corner.tr { right: 0; top: 0; }
+    #board .corner.bl { left: 0; bottom: 0; }
+    #board .corner.br { right: 0; bottom: 0; }
+  </style>
+</head>
+<body>
+<main>
+  <section class="landing" id="landing">
+    <h1>Open iPhone Use</h1>
+    <p>Share this iPhone's screen with this server so the agent can see it and act on it.</p>
+    <button id="start">Start sharing</button>
+    <p class="fine">The screen stays visible to this server while you share. Stop it from the iOS
+      broadcast indicator when you are done. Nothing is recorded, and the microphone stays off,
+      so videos keep autoplaying in other apps.</p>
+  </section>
+
+  <section class="live" id="live">
+    <div class="line"><span class="dot" id="dot"></span><span id="headline">Sharing</span></div>
+    <p class="fine" id="hint">Ready. Start a task or use Calibrate pointer to prepare control.</p>
+    <div class="row">
+      <button class="secondary" id="stop">Stop sharing</button>
+      <button class="secondary" id="calibrate">Calibrate pointer</button>
+    </div>
+    <p class="fine" id="boardNote" hidden></p>
+    <details>
+      <summary>Details</summary>
+      <pre id="status">Not sharing</pre>
+    </details>
+  </section>
+
+  <video id="preview" autoplay muted playsinline></video>
+
+  <div id="board">
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+      <g stroke="#d7dbe2" stroke-width="0.15">
+        <line x1="10" y1="0" x2="10" y2="100"/><line x1="20" y1="0" x2="20" y2="100"/>
+        <line x1="30" y1="0" x2="30" y2="100"/><line x1="40" y1="0" x2="40" y2="100"/>
+        <line x1="50" y1="0" x2="50" y2="100"/><line x1="60" y1="0" x2="60" y2="100"/>
+        <line x1="70" y1="0" x2="70" y2="100"/><line x1="80" y1="0" x2="80" y2="100"/>
+        <line x1="90" y1="0" x2="90" y2="100"/>
+        <line x1="0" y1="10" x2="100" y2="10"/><line x1="0" y1="20" x2="100" y2="20"/>
+        <line x1="0" y1="30" x2="100" y2="30"/><line x1="0" y1="40" x2="100" y2="40"/>
+        <line x1="0" y1="50" x2="100" y2="50"/><line x1="0" y1="60" x2="100" y2="60"/>
+        <line x1="0" y1="70" x2="100" y2="70"/><line x1="0" y1="80" x2="100" y2="80"/>
+        <line x1="0" y1="90" x2="100" y2="90"/>
+      </g>
+      <g stroke="#9aa3b2" stroke-width="0.3">
+        <line x1="25" y1="0" x2="25" y2="100"/><line x1="75" y1="0" x2="75" y2="100"/>
+        <line x1="0" y1="25" x2="100" y2="25"/><line x1="0" y1="75" x2="100" y2="75"/>
+      </g>
+    </svg>
+    <div class="edge top"></div><div class="edge bottom"></div>
+    <div class="edge left"></div><div class="edge right"></div>
+    <div class="corner tl"></div><div class="corner tr"></div>
+    <div class="corner bl"></div><div class="corner br"></div>
+    <button id="boardBack">Back</button>
+    <div class="hits" id="hits">Measuring…</div>
+  </div>
+</main>
+<script>
+(() => {
+  const token = new URLSearchParams(location.search).get('token') || '';
+  let pairEpoch = '', lastHover = 0;
+  const startButton = document.querySelector('#start');
+  const stopButton = document.querySelector('#stop');
+  const calibrateButton = document.querySelector('#calibrate');
+  const video = document.querySelector('#preview');
+  const status = document.querySelector('#status');
+  const landing = document.querySelector('#landing');
+  const live = document.querySelector('#live');
+  const headline = document.querySelector('#headline');
+  const hint = document.querySelector('#hint');
+  const dot = document.querySelector('#dot');
+  const board = document.querySelector('#board');
+  const boardHits = document.querySelector('#hits');
+  const canvas = document.createElement('canvas');
+
+  let stream = null, track = null, timer = null, frameCount = 0, startedAt = 0;
+  let generation = 0, frameCallback = null;
+  let audioContext = null, silentOscillator = null, silentGain = null, silentDestination = null;
+  let inFlight = null, pendingStop = Promise.resolve();
+  let lastUploadAt = 0, tapCount = 0, calibrationRequested = false;
+  let wakeLock = null, calibrationMessage = '', boardLease = null;
+  // The Mac publishes the upload rate and asks for the board with every accepted frame.
+  let framesPerSecond = 30;
+  // Only a distinct Mac request changes the board; manual toggles survive repeated frames.
+  let lastMacEpoch = null;
+
+  // --- audio -------------------------------------------------------------------
+  // An audio-backed element is not paused once the page leaves the foreground. The graph
+  // renders silence: the keepalive is inaudible and never captures the microphone.
+  function startAudioSession() {
+    try {
+      const Context = window.AudioContext || window.webkitAudioContext;
+      if (!Context) return;
+      audioContext = audioContext || new Context();
+      if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
+      if (!silentOscillator) {
+        silentOscillator = audioContext.createOscillator();
+        silentGain = audioContext.createGain();
+        silentGain.gain.value = 0;
+        silentDestination = audioContext.createMediaStreamDestination();
+        silentOscillator.connect(silentGain);
+        silentGain.connect(silentDestination);
+        silentGain.connect(audioContext.destination);
+        silentOscillator.start();
+      }
+    } catch { /* best effort: without it the page is paused in the background */ }
+  }
+
+  function attachPreview() {
+    const silentTracks = silentDestination ? silentDestination.stream.getAudioTracks() : [];
+    let target;
+    try { target = new MediaStream([...stream.getVideoTracks(), ...silentTracks]); }
+    catch { target = new MediaStream(stream.getVideoTracks()); }
+    video.srcObject = target;
+    video.muted = silentTracks.length === 0;
+    video.volume = 1;
+    return video.play().catch(() => {});
+  }
+
+  function stopAudioSession() {
+    try { silentOscillator?.stop(); } catch {}
+    try { silentGain?.disconnect(); } catch {}
+    try { silentDestination?.disconnect(); } catch {}
+    try { audioContext?.close(); } catch {}
+    silentOscillator = null; silentGain = null; silentDestination = null; audioContext = null;
+  }
+
+  // --- geometry ----------------------------------------------------------------
+  // iOS Safari gives the page a viewport that is smaller than the physical screen: the
+  // status bar sits above it and the browser toolbar below it. Taps are reported in viewport
+  // fractions and pointer targets arrive as screen fractions, so both sides need this.
+  function viewportGeometry() {
+    const vv = window.visualViewport;
+    const screenHeight = window.screen?.height || window.innerHeight;
+    return {
+      height: vv ? vv.height : window.innerHeight,
+      top: vv ? vv.offsetTop : 0,
+      screen: screenHeight
+    };
+  }
+
+  // --- calibration board -------------------------------------------------------
+  async function keepScreenAwake() {
+    if (!stream || wakeLock || document.hidden || !navigator.wakeLock?.request) return;
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } catch { /* OS may deny it; no settings or permissions are changed. */ }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void keepScreenAwake();
+  });
+
+  async function requestCalibration(force = false) {
+    calibrateButton.disabled = true;
+    calibrationMessage = '';
+    hint.textContent = 'Checking pointer calibration. Keep this page in front.';
+    const run = generation;
+    try {
+      const response = await fetch('/api/calibrate', {
+        method: 'POST', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-Open-iPhone-Use-Token': token },
+        body: JSON.stringify({ force })
+      });
+      const result = await response.json();
+      if (run !== generation) return;
+      calibrationMessage = result.ok
+        ? 'Ready. Pointer calibration checked. You can switch apps; the agent checks each action.'
+        : (result.message || 'Calibration unavailable. Try again with this page in front.');
+      if (!result.ok) setBoard(false);
+      hint.textContent = calibrationMessage;
+    } catch (error) {
+      if (run === generation) { setBoard(false); hint.textContent = String(error); }
+    }
+    finally { if (run === generation) calibrateButton.disabled = false; }
+  }
+
+  document.querySelector('#board').addEventListener('pointermove', (event) => {
+    if (event.pointerType !== 'mouse') return;
+    if (!pairEpoch || Date.now() - lastHover < 100) return;
+    lastHover = Date.now();
+    fetch('/api/pointer', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Open-iPhone-Use-Token': token},
+      body: JSON.stringify({epoch: pairEpoch})}).catch(() => {});
+  });
+
+  function reportTap(event) {
+    // The server maps this visible board rectangle into the captured physical screen.
+    // Layout viewport fractions drift when Safari chrome, page zoom or offsets change.
+    const rect = board.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return;
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
+    tapCount += 1;
+    boardHits.textContent = `${tapCount} taps · last ${x.toFixed(3)}, ${y.toFixed(3)}`;
+    fetch('/api/tap', {
+      method: 'POST', cache: 'no-store', keepalive: true,
+      headers: { 'Content-Type': 'application/json', 'X-Open-iPhone-Use-Token': token },
+      body: JSON.stringify({ x, y, geometry: {
+        client: {x: event.clientX, y: event.clientY},
+        board: {left: rect.left, top: rect.top, width: rect.width, height: rect.height},
+        visualViewport: window.visualViewport ? {offsetLeft: window.visualViewport.offsetLeft,
+          offsetTop: window.visualViewport.offsetTop, width: window.visualViewport.width,
+          height: window.visualViewport.height, scale: window.visualViewport.scale} : null
+      } })
+    }).catch(() => {});
+  }
+
+  function renewBoardLease() {
+    clearTimeout(boardLease);
+    boardLease = setTimeout(() => {
+      setBoard(false);
+      calibrationMessage = 'Calibration interrupted: no recent server response. Keep Safari sharing visible and prepare again.';
+      hint.textContent = calibrationMessage;
+    }, 10000);
+  }
+
+  function setBoard(on) {
+    if (on) renewBoardLease();
+    else { clearTimeout(boardLease); boardLease = null; }
+    if (on === board.classList.contains('on')) return;
+    board.classList.toggle('on', on);
+    if (on) {
+      board.addEventListener('pointerdown', reportTap);
+      hint.textContent = 'Measuring the pointer. Keep this page in front; it closes by itself.';
+    } else {
+      board.removeEventListener('pointerdown', reportTap);
+      hint.textContent = calibrationMessage || 'Calibration board closed. Check calibration status before switching apps.';
+    }
+    describe();
+  }
+
+  // --- status ------------------------------------------------------------------
+  function describe() {
+    const sharing = !!stream;
+    landing.classList.toggle('off', sharing);
+    live.classList.toggle('on', sharing);
+    dot.classList.toggle('paused', !!track?.muted);
+    headline.textContent = track?.muted ? 'Paused by iOS' : 'Sharing';
+    status.textContent = JSON.stringify({
+      sharing,
+      framesPerSecond,
+      framesSent: frameCount,
+      elapsedSeconds: startedAt ? Math.round((Date.now() - startedAt) / 1000) : 0,
+      audioTracks: stream ? stream.getAudioTracks().length : 0,
+      videoPaused: video.paused,
+      board: board.classList.contains('on'),
+      taps: tapCount,
+      readyState: track?.readyState || 'none',
+      lastFrame: status.dataset.lastFrame || null,
+      error: status.dataset.error || null
+    }, null, 2);
+  }
+
+  function notifyPaused(reason) {
+    pendingStop = fetch('/api/stop', {
+      method: 'POST', cache: 'no-store', keepalive: true,
+      headers: { 'Content-Type': 'application/json', 'X-Open-iPhone-Use-Token': token },
+      body: JSON.stringify({ reason })
+    }).catch(() => {});
+  }
+
+  // --- capture -----------------------------------------------------------------
+  // Backgrounded pages throttle timers, so a newly presented frame also triggers an upload.
+  // Whichever driver survives keeps the stream flowing.
+  function watchVideoFrames(run) {
+    if (!video.requestVideoFrameCallback) return;
+    frameCallback = video.requestVideoFrameCallback(() => {
+      if (run !== generation || !stream) return;
+      void sendFrame();
+      watchVideoFrames(run);
+    });
+  }
+
+  function keepPreviewPlaying() {
+    if (stream && video.paused) video.play().catch(() => {});
+  }
+
+  async function sendFrame() {
+    keepPreviewPlaying();
+    if (!stream || !track || track.muted || track.readyState !== 'live' ||
+        video.readyState < 2 || inFlight) return;
+    // Measure the interval from the start of an upload, so encoding and the round trip do
+    // not add themselves to every period.
+    if (Date.now() - lastUploadAt < (1000 / framesPerSecond) - 5) return;
+    lastUploadAt = Date.now();
+    const run = generation;
+    const controller = new AbortController();
+    inFlight = controller;
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    try {
+      const scale = Math.min(1, 900 / video.videoWidth);
+      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+      canvas.getContext('2d', { alpha: false }).drawImage(video, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.68));
+      if (!blob) throw new Error('Safari did not create a frame');
+      await pendingStop;
+      if (run !== generation || track.muted || controller.signal.aborted) return;
+      const response = await fetch('/api/frame', {
+        method: 'POST', cache: 'no-store', signal: controller.signal,
+        headers: {
+          'Content-Type': 'image/jpeg', 'X-Open-iPhone-Use-Token': token,
+          'X-Open-iPhone-Use-Page': `paused=${video.paused} t=${video.currentTime.toFixed(2)} rs=${video.readyState} muted=${track.muted} board=${board.classList.contains('on')} vh=${viewportGeometry().height} vy=${viewportGeometry().top} sh=${viewportGeometry().screen}`
+        },
+        body: blob
+      });
+      if (!response.ok) throw new Error('Screen receiver returned ' + response.status);
+      let result = {};
+      try { result = await response.json(); } catch {}
+      if (run !== generation || controller.signal.aborted) return;
+      frameCount += 1;
+      pairEpoch = result.pairEpoch || '';
+      if (!calibrationRequested) {
+        calibrationRequested = true;
+        void requestCalibration(false);
+      }
+      status.dataset.lastFrame = result.frameID || null;
+      status.dataset.error = '';
+      if (Number.isFinite(result.fps) && result.fps >= 1 && result.fps <= 60) framesPerSecond = result.fps;
+      // The Mac hashes the page it serves. Seeing a new hash means this tab is running an
+      // old script, so reload once instead of asking the owner to remember to refresh.
+      if (typeof result.pageVersion === 'string' && result.pageVersion) {
+        let seen = null;
+        try { seen = localStorage.getItem('open-iphone-usePageVersion'); } catch {}
+        if (seen !== result.pageVersion) {
+          try { localStorage.setItem('open-iphone-usePageVersion', result.pageVersion); } catch {}
+          if (seen !== null) { location.reload(); return; }
+        }
+      }
+      // Only a new epoch is acted on, so a manual toggle is not fought over on the next frame.
+      // The Mac starts its epoch at one, so the very first value it sends is already a request.
+      if (Number.isFinite(result.boardEpoch) && result.boardEpoch !== lastMacEpoch) {
+        lastMacEpoch = result.boardEpoch;
+        setBoard(result.boardOpen === true);
+      }
+      if (board.classList.contains('on') && result.boardOpen === true) renewBoardLease();
+    } catch (error) {
+      if (run === generation) status.dataset.error = String(error);
+    } finally {
+      clearTimeout(timeout);
+      if (inFlight === controller) inFlight = null;
+      describe();
+    }
+  }
+
+  startButton.addEventListener('click', async () => {
+    if (stream) return;
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      status.dataset.error = 'This browser cannot start display capture.';
+      describe(); return;
+    }
+    startButton.disabled = true;
+    try {
+      // Display capture must never ask for audio. On iOS the only audio this API could
+      // capture is the microphone, and a live microphone session makes other apps stop
+      // autoplaying their videos. The silent WebAudio session below keeps the page awake.
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30 } }, audio: false });
+      } catch (error) {
+        if (!['TypeError', 'OverconstrainedError'].includes(error.name)) throw error;
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      }
+      track = stream.getVideoTracks()[0];
+      startAudioSession();
+      await attachPreview();
+      void keepScreenAwake();
+      frameCount = 0; tapCount = 0; calibrationRequested = false; startedAt = Date.now(); lastUploadAt = 0;
+      const run = ++generation;
+      // A mute event means the OS broadcast itself paused. Hiding the page must not be
+      // treated as a stop: iOS can keep screen sharing active while Safari is hidden.
+      track.addEventListener('mute', () => {
+        if (run !== generation) return;
+        inFlight?.abort();
+        hint.textContent = 'iOS paused the broadcast. Resume it from the system broadcast control.';
+        describe();
+      });
+      track.addEventListener('unmute', () => { hint.textContent = 'Sharing again.'; describe(); });
+      track.addEventListener('ended', () => {
+        if (run === generation) stopShare('iOS ended the display capture');
+      });
+      stopButton.disabled = false;
+      // The board does not open by itself. A phone that is already calibrated does not need it,
+      // and it would cover the screen the owner just started sharing. The Mac asks for it with an
+      // epoch when a calibration is actually wanted.
+      watchVideoFrames(run);
+      timer = setInterval(sendFrame, 16);
+      describe();
+    } catch (error) { stopShare(String(error)); }
+  });
+
+  function stopShare(reason = 'Stopped by the user') {
+    generation += 1;
+    try { wakeLock?.release(); } catch {}
+    wakeLock = null;
+    stopAudioSession();
+    if (timer) clearInterval(timer);
+    timer = null;
+    if (frameCallback !== null && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(frameCallback);
+    frameCallback = null;
+    inFlight?.abort(); inFlight = null;
+    setBoard(false);
+    stream?.getTracks().forEach(item => item.stop());
+    stream = null; track = null; video.srcObject = null;
+    startButton.disabled = false; stopButton.disabled = true;
+    notifyPaused('stopped');
+    status.dataset.error = reason;
+    hint.textContent = 'Start again when you are ready.';
+    describe();
+  }
+
+  // The agent calibrates on its own when it needs to, but the owner can also ask for it here
+  // after changing something the app cannot notice, such as a different app's layout.
+  calibrateButton.addEventListener('click', () => { void requestCalibration(true); });
+  // Leaving the board by hand must not be undone by the next frame, so remember that the Mac's
+  // current request was already honoured.
+  document.querySelector('#boardBack').addEventListener('click', () => setBoard(false));
+  stopButton.addEventListener('click', () => stopShare());
+  describe();
+})();
+</script>
+</body>
+</html>
