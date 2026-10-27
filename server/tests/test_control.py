@@ -98,8 +98,8 @@ class ControlTests(unittest.TestCase):
         self.assertAlmostEqual(self.engine.calibration['height'],1000,delta=5)
         self.assertEqual(self.engine.peer,'phone-a')
 
-    def calibration_fakes(self, observations, stack=None):
-        """Use deterministic samples and fake motion; exercise real held-out logic."""
+    def calibration_fakes(self, stack=None):
+        """Deterministic board measurements without hardware or verification moves."""
         if stack is None:
             stack=ExitStack()
             self.addCleanup(stack.close)
@@ -115,67 +115,115 @@ class ControlTests(unittest.TestCase):
         def click(**kwargs):
             ux,uy=self.engine.units
             return (ux/600,uy/1000),rect,time.monotonic()
-        def capture(after,timeout):
-            self.assertGreaterEqual(after,self.engine.motion_at)
-            return time.monotonic(),self.engine.jpeg
-        def pointer(after,**kwargs):
-            self.assertTrue(self.engine.board_open)
-            self.assertEqual(after,self.engine.motion_at)
-            self.assertGreater(kwargs['timeout'],control.VERIFY_BUDGET)
-            self.assertLessEqual(kwargs['timeout'],control.CALIBRATION_VERIFY_BUDGET)
-            return observations()
         stack.enter_context(patch.object(self.engine,'open_calibration_board',side_effect=board))
         stack.enter_context(patch.object(self.engine,'home',side_effect=home))
-        stack.enter_context(patch.object(self.engine,'move',side_effect=move))
+        moves=stack.enter_context(patch.object(self.engine,'move',side_effect=move))
         clicks=stack.enter_context(patch.object(self.engine,'click',side_effect=click))
         stack.enter_context(patch.object(self.engine,'wait_tap',side_effect=lambda pressed,point,rect:point))
-        stack.enter_context(patch.object(self.engine,'capture_after',side_effect=capture))
-        pointers=stack.enter_context(patch.object(self.engine,'wait_pointer',side_effect=pointer))
-        stack.enter_context(patch('oiu.control.CALIBRATION_SETTLE',0))
-        self.engine.motion_at=time.monotonic()
-        return clicks,pointers
+        stack.enter_context(patch.object(self.engine,'absolute',side_effect=AssertionError('no held-out moves')))
+        return clicks,moves
 
-    def test_calibration_retries_unobserved_held_out_and_saves(self):
-        observations=iter([ObservationUnavailable('pointer not seen in time'),((.5,.392),None,1)])
-        def observe():
-            value=next(observations)
-            if isinstance(value,Exception): raise value
-            return value
-        clicks,pointers=self.calibration_fakes(observe)
-        result=self.engine.request('ensure_session')
-        self.assertTrue(result['ok'],result)
-        self.assertEqual(pointers.call_count,2)
+    def test_good_fit_is_saved_after_one_pass_without_verification(self):
+        clicks,moves=self.calibration_fakes()
+        self.engine.calibrate()
         self.assertEqual(clicks.call_count,7)
+        self.assertEqual(moves.call_count,7)
+        self.assertLessEqual(max(self.engine.calibration['fit_rms']),control.GOOD_FIT_RMS)
         self.assertEqual(json.loads(self.engine.path.read_text())['calibration'],self.engine.calibration)
+        self.assertFalse(self.engine.calibration['suspect'])
         self.assertFalse(self.engine.board_open)
 
-    def test_calibration_bounded_misses_refit_once_and_preserve_stored_mapping(self):
+    def test_poor_valid_fit_remeasures_once_and_saves_the_better_fit(self):
+        from oiu.calibration import fit
+        clicks,_=self.calibration_fakes()
+        fits=[]
+        def measured(samples,aspect):
+            candidate=fit(samples,aspect)
+            candidate['fit_rms']=[.012,.011] if not fits else [.005,.004]
+            fits.append(candidate)
+            return candidate
+        with patch('oiu.control.mapping.fit',side_effect=measured): self.engine.calibrate()
+        self.assertEqual(clicks.call_count,14)
+        self.assertEqual(self.engine.calibration,fits[1])
+        self.assertEqual(json.loads(self.engine.path.read_text())['calibration'],fits[1])
+
+    def test_second_fit_failure_or_worse_fit_keeps_first_valid_fit(self):
+        from oiu.calibration import fit
+        for second in ('invalid','worse'):
+            with self.subTest(second=second),ExitStack() as scope:
+                clicks,_=self.calibration_fakes(scope)
+                fits=[]
+                def measured(samples,aspect):
+                    if fits and second=='invalid': raise ValueError('Calibration motion is inconsistent')
+                    candidate=fit(samples,aspect)
+                    candidate['fit_rms']=[.012,.011] if not fits else [.014,.013]
+                    fits.append(candidate)
+                    return candidate
+                with patch('oiu.control.mapping.fit',side_effect=measured): self.engine.calibrate()
+                self.assertEqual(clicks.call_count,14)
+                self.assertEqual(self.engine.calibration,fits[0])
+
+    def test_inconsistent_or_clamped_fit_remeasures_once(self):
+        from oiu.calibration import fit
+        for reason in ('Calibration motion is inconsistent','Calibration gain is clamped or inconsistent'):
+            with self.subTest(reason=reason),ExitStack() as scope:
+                clicks,_=self.calibration_fakes(scope)
+                calls=[]
+                def measured(samples,aspect):
+                    calls.append(1)
+                    if len(calls)==1: raise ValueError(reason)
+                    return fit(samples,aspect)
+                with patch('oiu.control.mapping.fit',side_effect=measured):self.engine.calibrate()
+                self.assertEqual(clicks.call_count,14)
+
+    def test_failed_fits_preserve_the_stored_mapping(self):
         stored={'owner':'previous mapping'}
-        self.engine.calibration=stored
-        self.engine.save()
+        self.engine.calibration=stored;self.engine.save()
         before=self.engine.path.read_bytes()
-        clicks,pointers=self.calibration_fakes(lambda:((.53,.392),None,1))
-        with self.assertRaisesRegex(ValueError,r'measured miss 3.00%.*limit 1%'):
-            self.engine.calibrate()
-        self.assertEqual(clicks.call_count,14)  # Seven fresh samples per fit.
-        self.assertEqual(pointers.call_count,control.CALIBRATION_VERIFY_ATTEMPTS*2*3)
+        clicks,_=self.calibration_fakes()
+        with patch('oiu.control.mapping.fit',side_effect=ValueError('Calibration motion is inconsistent')):
+            with self.assertRaisesRegex(ValueError,'inconsistent'):self.engine.calibrate()
+        self.assertEqual(clicks.call_count,14)
         self.assertIs(self.engine.calibration,stored)
         self.assertEqual(self.engine.path.read_bytes(),before)
-        self.assertFalse(self.engine.board_open)
 
-    def test_calibration_held_out_safety_errors_abort_without_retry(self):
+    def test_measurement_pointer_timeout_retries_only_that_measurement_once(self):
+        clicks,moves=self.calibration_fakes()
+        original=clicks.side_effect
+        seen=[]
+        def click(**kwargs):
+            seen.append(self.engine.units)
+            if len(seen)==3:raise ObservationUnavailable('pointer not seen in time')
+            return original(**kwargs)
+        clicks.side_effect=click
+        self.engine.calibrate()
+        self.assertEqual(clicks.call_count,8)
+        self.assertEqual(moves.call_count,7)
+        self.assertEqual(seen[2],seen[3])
+
+    def test_measurement_timeout_is_bounded(self):
+        clicks,_=self.calibration_fakes()
+        clicks.side_effect=ObservationUnavailable('pointer not seen in time')
+        with self.assertRaisesRegex(ValueError,'pointer not seen'):self.engine.calibrate()
+        self.assertEqual(clicks.call_count,2)
+        self.assertFalse(self.engine.path.exists())
+
+    def test_calibration_safety_errors_abort_without_retry(self):
         for reason in ('Input canceled','Paired iPhone disconnected',
                        'Screen sharing stopped or capture is stale; input released',
-                       'Screen orientation changed; prepare the pointer again'):
+                       'Screen orientation changed; prepare the pointer again',
+                       'Calibration time budget exhausted'):
             with self.subTest(reason=reason), ExitStack() as scope:
-                def abort(): raise ValueError(reason)
-                clicks,pointers=self.calibration_fakes(abort,scope)
+                clicks,_=self.calibration_fakes(scope)
+                clicks.side_effect=ValueError(reason)
                 with self.assertRaisesRegex(ValueError,reason): self.engine.calibrate()
-                self.assertEqual(pointers.call_count,1)
-                self.assertEqual(clicks.call_count,7)
+                self.assertEqual(clicks.call_count,1)
                 self.assertIsNone(self.engine.calibration)
                 self.assertFalse(self.engine.path.exists())
                 self.assertFalse(self.engine.board_open)
+
+    def test_ingest_requests_thirty_fps(self):
+        self.assertEqual(self.engine.ingest(screen())['fps'],30)
 
     def test_saved_calibration_is_reused_by_a_new_control_without_preparation(self):
         self.assertTrue(self.engine.request('ensure_session')['ok'])

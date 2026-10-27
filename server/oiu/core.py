@@ -14,10 +14,11 @@ from .permissions import secure_directory
 from .names import specific, distinguish
 
 PREPARATION = {"ensure_session", "prepare_session", "pointer_quick_probe"}
+CAPTURE_FPS = 30
 FRAME_MAX_AGE = 120.0
-# At 15 fps this retains over four minutes of IDs, including expired IDs so
+# At 30 fps this retains over four minutes of IDs, including expired IDs so
 # their age can be reported. The hard cap also bounds high-rate senders.
-FRAME_HISTORY_LIMIT = 4096
+FRAME_HISTORY_LIMIT = 8192
 MAX_FRAME = 4 * 1024 * 1024
 ACTIONS = {"move_pointer", "click", "scroll", "type_text", "send_key", "pointer_tap",
            "pointer_move", "pointer_home", "ensure_session", "prepare_session", "swipe",
@@ -72,7 +73,7 @@ class Device:
             self.frame_id = controls.get("frameID", str(uuid.uuid4()))
             self.jpeg, self.at, self.active = jpeg, time.monotonic(), True
             self.history.append((self.frame_id, self.at))
-            return {"fps": 15, "frameID": self.frame_id, **controls}
+            return {"fps": CAPTURE_FPS, "frameID": self.frame_id, **controls}
 
     def stop(self):
         with self.lock:

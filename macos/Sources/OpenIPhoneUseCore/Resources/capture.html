@@ -137,7 +137,7 @@
   let lastUploadAt = 0, tapCount = 0, calibrationRequested = false;
   let wakeLock = null, calibrationMessage = '', boardLease = null;
   // The Mac publishes the upload rate and asks for the board with every accepted frame.
-  let framesPerSecond = 1;
+  let framesPerSecond = 30;
   // Only a distinct Mac request changes the board; manual toggles survive repeated frames.
   let lastMacEpoch = null;
 
@@ -405,7 +405,12 @@
       // Display capture must never ask for audio. On iOS the only audio this API could
       // capture is the microphone, and a live microphone session makes other apps stop
       // autoplaying their videos. The silent WebAudio session below keeps the page awake.
-      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30 } }, audio: false });
+      } catch (error) {
+        if (!['TypeError', 'OverconstrainedError'].includes(error.name)) throw error;
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      }
       track = stream.getVideoTracks()[0];
       startAudioSession();
       await attachPreview();
@@ -429,7 +434,7 @@
       // and it would cover the screen the owner just started sharing. The Mac asks for it with an
       // epoch when a calibration is actually wanted.
       watchVideoFrames(run);
-      timer = setInterval(sendFrame, Math.max(16, Math.round(500 / framesPerSecond)));
+      timer = setInterval(sendFrame, 16);
       describe();
     } catch (error) { stopShare(String(error)); }
   });

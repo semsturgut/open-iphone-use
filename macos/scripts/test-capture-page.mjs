@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const html = fs.readFileSync(new URL('../Sources/OpenIPhoneUseCore/Resources/capture.html', import.meta.url), 'utf8');
+assert.equal(html, fs.readFileSync(new URL('../../server/oiu/web/capture.html', import.meta.url), 'utf8'));
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 const listeners = () => ({ handlers: {}, addEventListener(name, cb) { this.handlers[name] = cb; }, removeEventListener(name) { delete this.handlers[name]; } });
@@ -40,6 +41,8 @@ const audioTrack = { kind: 'audio', readyState: 'live', stop() {} };
 const videoTrack = { kind: 'video', readyState: 'live', muted: false, handlers: {}, addEventListener(n, cb) { this.handlers[n] = cb; }, stop() {} };
 
 let videoFrameCallback, intervalCallback, heldResponse, holdNextFrame = false, failCalibration = false;
+let intervalDelay, rejectConstraint;
+const displayConstraints = [];
 let nextTimer = 0; const timers = new Map();
 let nowMs = 1_700_000_000_000;
 const tick = ms => { nowMs += ms; };
@@ -95,7 +98,11 @@ vm.runInNewContext(script, {
     } },
     mediaDevices: {
       async getDisplayMedia(constraints) {
+        displayConstraints.push(constraints);
         audio.requestedAudio.push(constraints.audio);
+        if (rejectConstraint && constraints.video !== true) {
+          const error = new Error('Unsupported frame rate'); error.name = rejectConstraint; throw error;
+        }
         // iOS returns no audio track for display capture, like the real device.
         return { getVideoTracks: () => [videoTrack], getAudioTracks: () => [], getTracks: () => [videoTrack] };
       },
@@ -112,7 +119,7 @@ vm.runInNewContext(script, {
     getAudioTracks() { return this.tracks.filter(t => t.kind === 'audio'); }
     getTracks() { return this.tracks; }
   },
-  setInterval(cb) { intervalCallback = cb; return 1; }, clearInterval() { intervalCallback = null; },
+  setInterval(cb, delay) { intervalCallback = cb; intervalDelay = delay; return 1; }, clearInterval() { intervalCallback = null; },
   setTimeout(cb, delay) { const id = ++nextTimer; timers.set(id, { cb, delay }); return id; },
   clearTimeout(id) { timers.delete(id); },
   async fetch(path, options) {
@@ -135,6 +142,8 @@ assert.equal(landing.classList.contains('off'), false, 'the landing screen start
 assert.equal(live.classList.contains('on'), false, 'the live section starts hidden');
 
 await start.handlers.click();
+assert.equal(displayConstraints[0].video.frameRate.ideal, 30);
+assert.equal(intervalDelay, 16, 'fallback ticks must support 30 FPS and server rate changes');
 assert.equal(wake.requested, 1, 'sharing requests a screen wake lock when supported');
 assert.equal(audio.requestedAudio[0], false,
   'display capture must never ask for audio: a live microphone session stops other apps from autoplaying videos');
@@ -299,3 +308,33 @@ assert.equal(audio.closed, 1, 'stopping the share must close the audio session')
 assert.equal(board.classList.contains('on'), false, 'stopping the share must close the board');
 assert.equal(JSON.parse(requests.at(-1).options.body).reason, 'stopped');
 console.log('Landing-to-board flow, audio keep-alive, background continuation, board epochs, taps and stop checks passed');
+
+// Safari constraint rejection falls back without audio, and the fallback timer obeys
+// updated rates while allowing only one upload in flight.
+for (const name of ['TypeError', 'OverconstrainedError']) {
+  rejectConstraint = name;
+  const before = displayConstraints.length;
+  await start.handlers.click();
+  assert.equal(displayConstraints[before].video.frameRate.ideal, 30);
+  assert.equal(displayConstraints[before + 1].video, true);
+  assert.equal(displayConstraints[before + 1].audio, false);
+  holdNextFrame = true;
+  tick(1000);
+  const pending = intervalCallback();
+  await flush();
+  const uploads = frameRequests().length;
+  tick(34);
+  await intervalCallback();
+  assert.equal(frameRequests().length, uploads, 'never overlap uploads');
+  heldResponse({ ok: true, async json() { return { fps: 30 }; } });
+  await pending;
+  tick(34);
+  await intervalCallback();
+  assert.equal(frameRequests().length, uploads + 1, '30 FPS reply must allow the next upload after 34ms');
+  tick(34);
+  await intervalCallback();
+  assert.equal(frameRequests().length, uploads + 1, 'a 1 FPS reply must reduce the upload rate');
+  stop.handlers.click();
+}
+assert.ok(audio.requestedAudio.every(value => value === false));
+console.log('30 FPS capture, constraint fallback, dynamic rate gating and serialized uploads passed');

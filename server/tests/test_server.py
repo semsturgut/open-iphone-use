@@ -13,11 +13,16 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from oiu.core import Registry, FRAME_HISTORY_LIMIT, FRAME_MAX_AGE
+from oiu.core import Device, Registry, FRAME_HISTORY_LIMIT, FRAME_MAX_AGE
 from oiu.http import Server
 from oiu.mcp import tools, handle
 
 JPEG = b'\xff\xd8\xfftest'
+
+
+class CaptureRateTests(unittest.TestCase):
+    def test_upload_requests_thirty_fps(self):
+        self.assertEqual(Device('test','Test','token').upload(JPEG)['fps'],30)
 
 
 class FakeHID:

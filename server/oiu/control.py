@@ -10,16 +10,17 @@ import time
 import uuid
 
 from .hid import mouse, keyboard, chord, stroke, fraction
+from .core import CAPTURE_FPS
 from . import vision
 from . import calibration as mapping
 
 
 VERIFY_BUDGET = 2.0
-CALIBRATION_VERIFY_BUDGET = 6.0
-CALIBRATION_VERIFY_ATTEMPTS = 3
-CALIBRATION_SETTLE = .2
 CALIBRATION_BUDGET = 55.0
-CALIBRATION_REFIT_MAX_MISS = .10
+# Good observed fits were .0042–.0056; .01 allows roughly twice that error.
+GOOD_FIT_RMS = .01
+# Three times the tap tolerance and the maximum residual accepted by fit().
+SUSPECT_MISS = .03
 
 
 class ObservationUnavailable(ValueError):
@@ -108,7 +109,7 @@ class Control:
             if self.closed: raise ValueError('Device removed or control closed')
             self.jpeg, self.at, self.frame_id = jpeg, time.monotonic(), str(uuid.uuid4())
             self.condition.notify_all()
-            return dict(frameID=self.frame_id, fps=15, boardOpen=self.board_open,
+            return dict(frameID=self.frame_id, fps=CAPTURE_FPS, boardOpen=self.board_open,
                         boardEpoch=self.board_epoch, pairEpoch=self.pair_epoch)
 
     def open_board(self, value, pair_epoch=''):
@@ -280,85 +281,74 @@ class Control:
 
     def calibrate(self):
         candidate=None
-        failures=[]
         self.calibration_deadline=time.monotonic()+CALIBRATION_BUDGET
         try:
             rect=self.open_calibration_board()
             initial=vision.image(self.jpeg)
             aspect=initial.width/initial.height
             for measurement in range(2):
-                samples=[]
+                self.check_motion_state(aspect)
+                try:
+                    samples=[]
 
-                def measure(ux,uy,target=None):
-                    self.home(); self.move(ux,uy)
-                    def plausible(point,rect,jpeg):
-                        current=vision.image(jpeg)
-                        if abs(current.width/current.height-aspect)>.03:
-                            raise ValueError('Orientation changed during calibration; prepare again with Safari in front')
-                        # Never click the Back control or outside the safe white board interior.
-                        safe=vision.safe_calibration_point(point,rect)
-                        if samples:
-                            safe=safe and math.dist(point,samples[-1][2:])>.04
-                        if target is None and samples:
-                            safe=safe and point[0]-samples[-1][2]>.04 and point[1]-samples[-1][3]>.04
-                        return safe and (target is None or math.dist(point,target)<.18)
-                    point,visible,pressed=self.click(gated=True,after=self.motion_at,plausible=plausible)
-                    actual=self.wait_tap(pressed,point,visible)
-                    samples.append((ux,uy,*actual))
-
-                # Seed the scale, then measure all four board quadrants and its center.
-                measure(64,128)
-                measure(160,320)
-                spans=[];offsets=[]
-                for axis,minimum in ((0,100),(1,200)):
-                    delta=samples[1][axis+2]-samples[0][axis+2]
-                    if delta<=.04: raise ValueError('Calibration seed was clamped; check tracking speed and standard pointer size')
-                    span=(samples[1][axis]-samples[0][axis])/delta
-                    if not minimum<=span<=20000: raise ValueError('Calibration seed scale is invalid; check AssistiveTouch settings')
-                    spans.append(span);offsets.append(samples[0][axis+2]-samples[0][axis]/span)
-                for x,y in ((.22,.22),(.78,.22),(.22,.78),(.78,.78),(.5,.5)):
-                    target=(rect[0]+x*rect[2],rect[1]+y*rect[3])
-                    ux,uy=(round((target[a]-offsets[a])*spans[a]) for a in (0,1))
-                    measure(ux,uy,target)
-                candidate=mapping.fit(samples,aspect)
-                target=(rect[0]+.5*rect[2],rect[1]+.38*rect[3])
-                measured_misses=[]
-                failures=[]
-                for attempt in range(CALIBRATION_VERIFY_ATTEMPTS):
-                    self.check_motion_state(aspect)
-                    attempt_deadline=time.monotonic()+CALIBRATION_VERIFY_BUDGET
-                    time.sleep(CALIBRATION_SETTLE)
-                    # Discard frames from the preceding attempt, including its corrections.
-                    try:
-                        self.capture_after(time.monotonic(),timeout=max(.001,attempt_deadline-time.monotonic()))
-                    except ObservationUnavailable as error:
+                    def measure(ux,uy,target=None):
                         self.check_motion_state(aspect)
-                        failures.append('pointer not observed: '+str(error))
-                        continue
+                        self.home(); self.move(ux,uy)
+                        def plausible(point,rect,jpeg):
+                            current=vision.image(jpeg)
+                            if abs(current.width/current.height-aspect)>.03:
+                                raise ValueError('Orientation changed during calibration; prepare again with Safari in front')
+                            # Never click the Back control or outside the safe white board interior.
+                            safe=vision.safe_calibration_point(point,rect)
+                            if samples:
+                                safe=safe and math.dist(point,samples[-1][2:])>.04
+                            if target is None and samples:
+                                safe=safe and point[0]-samples[-1][2]>.04 and point[1]-samples[-1][3]>.04
+                            return safe and (target is None or math.dist(point,target)<.18)
+                        for attempt in range(2):
+                            try:
+                                point,visible,pressed=self.click(gated=True,after=self.motion_at,plausible=plausible)
+                                break
+                            except ObservationUnavailable:
+                                self.check_motion_state(aspect)
+                                if attempt: raise
+                        actual=self.wait_tap(pressed,point,visible)
+                        samples.append((ux,uy,*actual))
+
+                    # Seed the scale, then measure all four board quadrants and its center.
+                    measure(64,128)
+                    measure(160,320)
+                    spans=[];offsets=[]
+                    for axis,minimum in ((0,100),(1,200)):
+                        delta=samples[1][axis+2]-samples[0][axis+2]
+                        if delta<=.04: raise ValueError('Calibration seed was clamped; check tracking speed and standard pointer size')
+                        span=(samples[1][axis]-samples[0][axis])/delta
+                        if not minimum<=span<=20000: raise ValueError('Calibration seed scale is invalid; check AssistiveTouch settings')
+                        spans.append(span);offsets.append(samples[0][axis+2]-samples[0][axis]/span)
+                    for x,y in ((.22,.22),(.78,.22),(.22,.78),(.78,.78),(.5,.5)):
+                        target=(rect[0]+x*rect[2],rect[1]+y*rect[3])
+                        ux,uy=(round((target[a]-offsets[a])*spans[a]) for a in (0,1))
+                        measure(ux,uy,target)
+                    fitted=mapping.fit(samples,aspect)
+                except ValueError as error:
                     self.check_motion_state(aspect)
-                    point,verified=self.absolute(*target,calibration=candidate,
-                                                 verify_budget=max(.001,attempt_deadline-time.monotonic()))
-                    if verified: break
-                    if point is None:
-                        failures.append('pointer not observed: '+self.verification_reason)
-                    else:
-                        miss=math.dist(point,target)
-                        measured_misses.append(miss)
-                        failures.append('measured miss %.2f%% of screen (limit 1%%); %s' %
-                                        (100*miss,self.verification_reason))
+                    retryable=any(word in str(error).lower() for word in ('inconsistent','clamped'))
+                    if isinstance(error,ObservationUnavailable):
+                        if candidate is None: raise
+                    elif retryable:
+                        if measurement==0: continue
+                        if candidate is None: raise
+                    else: raise
                 else:
-                    # Only a measured, moderate miss justifies collecting a new fit.
-                    if measurement==0 and measured_misses and max(measured_misses)<=CALIBRATION_REFIT_MAX_MISS:
-                        continue
-                    raise ValueError('held-out calibration validation exhausted: '+'; '.join(failures))
-                break
-            self.fresh()
+                    if candidate is None or max(fitted['fit_rms'])<max(candidate['fit_rms']):
+                        candidate=fitted
+                    if max(candidate['fit_rms'])<=GOOD_FIT_RMS: break
+            self.check_motion_state(aspect)
         except (ValueError,OSError) as error:
-            if str(error)=='Calibration time budget exhausted' and failures:
-                error=ValueError(str(error)+'; '+'; '.join(failures))
             # An in-flight attempt never destroys a previously stored mapping.
             raise ValueError('Calibration failed; the stored mapping is untouched. Keep Safari sharing visible, use the standard grey AssistiveTouch pointer, keep tracking speed/Zoom fixed, and prepare again. '+str(error)) from error
         else:
+            candidate['suspect']=False
             self.calibration=candidate
             self.save()
         finally:
@@ -371,7 +361,13 @@ class Control:
             pic=vision.image(self.jpeg)
             if self.calibration.get('version')!=mapping.VERSION or self.calibration.get('motion')!=mapping.MOTION or abs(pic.width/pic.height-self.calibration['aspect'])>.03:
                 self.calibration=None
-        if not self.calibration: self.calibrate()
+        if self.calibration and self.calibration.get('suspect'):
+            if self.calibration.get('suspect_recalibration_attempted'):
+                raise ValueError('Automatic recalibration already attempted; keep Safari sharing visible and explicitly calibrate again')
+            self.calibration['suspect_recalibration_attempted']=True
+            self.save()
+            self.calibrate()
+        elif not self.calibration: self.calibrate()
 
     def check_motion_state(self, aspect):
         """Safety failures must never be treated as a retryable observation timeout."""
@@ -392,6 +388,7 @@ class Control:
         ux,uy=round((x-c['offset_x'])*c['width']),round((y-c['offset_y'])*c['height'])
         self.fresh()
         self.verification_reason='pointer not observed'
+        self.first_landing_distance=None
         self.home()
         deadline=time.monotonic()+verify_budget
         try: _,reference=self.capture_after(time.monotonic(),timeout=max(.001,deadline-time.monotonic()))
@@ -400,9 +397,10 @@ class Control:
         self.move(ux,uy)
         point=None
         try:
-            point,_,_=self.wait_pointer(self.motion_at,expected=(x,y) if calibration is None else None,
+            point,_,_=self.wait_pointer(self.motion_at,expected=(x,y),
                                         tolerance=.18,board_required=False,aspect=c['aspect'],
                                         timeout=max(.001,deadline-time.monotonic()),reference=reference)
+            self.first_landing_distance=math.dist(point,(x,y))
             for _ in range(2):
                 if math.dist(point,(x,y))<=mapping.TOLERANCE: break
                 if time.monotonic()>=deadline or math.dist(point,(x,y))>.18: break
@@ -410,7 +408,7 @@ class Control:
                 if dx==dy==0: break
                 self.move(dx,dy)
                 point=None  # A prior landing is not evidence about this correction.
-                point,_,_=self.wait_pointer(self.motion_at,expected=(x,y) if calibration is None else None,
+                point,_,_=self.wait_pointer(self.motion_at,expected=(x,y),
                                         tolerance=.18,board_required=False,aspect=c['aspect'],
                                             timeout=max(.001,deadline-time.monotonic()))
         except ObservationUnavailable as error:
@@ -418,7 +416,12 @@ class Control:
         else:
             self.verification_reason='measured landing distance %.2f%% of screen' % (100*math.dist(point,(x,y)))
         self.check_motion_state(c['aspect'])
-        return point, bool(point and math.dist(point,(x,y))<=mapping.TOLERANCE)
+        verified=bool(point and math.dist(point,(x,y))<=mapping.TOLERANCE)
+        if calibration is None and self.first_landing_distance is not None and self.first_landing_distance>SUSPECT_MISS:
+            if not c.get('suspect'):
+                c['suspect']=True
+                self.save()
+        return point, verified
 
     def stop_capture(self):
         self.generation+=1
@@ -518,6 +521,8 @@ class Control:
                 elif verified: message='Pointer is at '+target+'; position visually verified'
                 elif point is None: message='Pointer moved using calibration only; the pointer was not visible to verify'
                 else: message='Pointer read (%.3f,%.3f) near the target; position not verified'%point
+                if self.calibration.get('suspect'):
+                    message+='; calibration marked for automatic recalibration on next ensure_session'
             elif operation=='type_text':
                 text=args['text']
                 if not isinstance(text,str) or len(text.encode())>500: raise ValueError('Text must contain at most 500 ASCII bytes')
