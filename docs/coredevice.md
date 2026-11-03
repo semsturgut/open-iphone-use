@@ -71,5 +71,15 @@ With Xcode 27.2 installed and opened:
   - `pointer_tap(0.5, 0.818)` hit the Home Screen Search button and opened Spotlight.
 - Closing the backend took about 0.1 s.
 
+iPhone SE 2nd generation (iPhone12,8), iOS 27.0.1, through the Web UI:
+
+- The phone was listed with its name and iOS version, and **Add phone** brought up its live
+  MJPEG screen.
+- Checked on the live screen:
+  - Clicking the Calendar icon opened Calendar.
+  - **Home** returned to the Home Screen.
+  - **Swipe down** opened search.
+  - **Type** entered `Hello SE 27`.
+
 Not checked: other devices or iOS versions, long sessions, Wi-Fi, pinch and multi-touch,
 apps that use the camera, and the screenshot fallback's CoreDevice capture path.

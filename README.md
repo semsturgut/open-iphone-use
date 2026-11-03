@@ -98,7 +98,7 @@ How the tools work:
 ## Limits
 
 - One USB phone per server process.
-- Tested on one iPhone 13 on iOS 27.0. Wi-Fi, multi-touch and long sessions are not tested yet.
+- Tested on an iPhone 13 (iOS 27.0) and an iPhone SE (iOS 27.0.1). Wi-Fi, multi-touch and long sessions are not tested yet.
 - The screen stream will not start while an app is using the camera or microphone.
 - macOS only: the stream is decoded with VideoToolbox.
 
