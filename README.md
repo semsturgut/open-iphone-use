@@ -1,119 +1,108 @@
 # Open iPhone Use
 
-Control your own iPhones with a local CLI server, Bluetooth HID, Safari screen sharing and an
-image-capable MCP agent. Multiple phones can run at once, each with its own input queue,
-frames and calibration. The server contains no model or AI API key.
+Let an AI agent use your own iPhone. Connect the phone to your Mac by cable or Wi-Fi, and
+Open iPhone Use streams its screen live and taps, swipes, types and presses buttons on it
+through Xcode's CoreDevice services. Your agent connects over MCP. The server contains no
+model or AI API key.
 
-The **macOS app and DMG are deprecated and removed**; use the CLI. The `macos/` Swift
-package supplies the headless Bluetooth HID helper used on macOS and retains a legacy MCP
-compatibility test surface.
+- **Live screen:** the same HEVC stream Xcode mirrors, about 45 frames per second over USB.
+- **Exact input:** touches land on the exact pixel, so there is no pointer to calibrate. Text,
+  key chords and the Home, Lock, volume and Siri buttons work too.
+- **Nothing on the phone:** no app, no Bluetooth pairing, no certificate, no Safari tab.
+
+> **Using Xcode 26 or iOS 26?** Install
+> [v0.0.3](https://github.com/semsturgut/open-iphone-use/releases/tag/v0.0.3), the last release
+> that works without Xcode 27 (Bluetooth HID and Safari screen sharing):
+> `curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --version v0.0.3`
+
+## Requirements
+
+- A Mac with **Xcode 27 or later**. Open Xcode once while the iPhone is connected, so it
+  installs its developer tools on the phone.
+- An iPhone on **iOS 27 or later**, connected by USB, with **Trust This Computer** accepted.
+- **Developer Mode** on the iPhone: **Settings → Privacy & Security → Developer Mode**. The
+  phone restarts and asks you to confirm.
+- If the phone shows **Settings → Developer → UI Automation**, turn it on.
 
 ## Quick start
-
-**Install**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash
 ```
 
-**Start**
-
 ```sh
 open-iphone-use serve
 ```
 
-It starts in the background and returns, printing a `Web UI:` link (a local `http://127.0.0.1:…` address). Open that link in your browser to use the web UI. Use `open-iphone-use stop` to stop the server.
+```sh
+open-iphone-use new
+```
 
-**Uninstall**
+`serve` starts in the background and prints a `Web UI:` link (`http://127.0.0.1:27893`).
+`new` adds the connected phone; with several phones it asks which one, or takes
+`--udid UDID` (`open-iphone-use candidates` lists them). You can also select **Add phone** in
+the Web UI.
+
+**Watch it live.** The Web UI shows each phone's screen live; click the screen to tap. It is
+loopback-only and needs no token, so any local process can operate it: do not expose it
+through a proxy.
+
+```sh
+open-iphone-use devices                    # list added phones
+open-iphone-use status --device DEVICE_ID  # connection details
+open-iphone-use remove DEVICE_ID           # remove a phone and stop its control
+open-iphone-use stop                       # stop the server
+```
+
+To uninstall:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --uninstall
 ```
 
-Windows: see [Advanced installation](docs/installation.md#advanced-installation).
+See [installation](docs/installation.md) for options and development setup.
 
-See [Advanced installation](docs/installation.md#advanced-installation) for options, platform requirements and development setup.
+## Wi-Fi
 
-`serve` runs headless in the background; use `open-iphone-use serve --foreground` for
-debugging and `open-iphone-use stop` to stop it. It is not a login or reboot service.
-Open the Web UI at **http://127.0.0.1:27893**: it is loopback-only and needs no token.
-Any local process can operate it, so do not expose it through a proxy. Each device card
-shows independent green/red Bluetooth and screen-sharing lights, a live thumbnail and
-frame age.
+Once Xcode has paired the phone over a cable, macOS can also reach it wirelessly. When the
+cable is unplugged and both are on the same network, the phone shows up as **Wi-Fi** in
+`open-iphone-use candidates` and the Web UI, and can be added and controlled without the
+cable. If it does not appear, open Xcode's Devices window once with the phone nearby. The phone and Mac must be on the same network. Over Wi-Fi the screen arrives at a lower
+frame rate (about 12 fps in a first test) and takes longer to start.
 
-![Local web UI with two iPhone cards, status lights, live thumbnails and sharing controls](docs/media/web-ui.png)
+To reconnect, plug the cable back in or bring the phone onto the same Wi-Fi: the server keeps
+retrying and the phone's screen comes back in the Web UI by itself. Added phones are remembered
+across server restarts.
 
-## Pair and share each iPhone
+## MCP
 
-1. Unlock the iPhone, enable AssistiveTouch, then pair the host under **Settings →
-   Accessibility → Touch → AssistiveTouch → Devices → Bluetooth Devices**. Approve the
-   owner's pairing prompts. Both keyboard and pointer HID subscriptions must be connected.
-2. Choose the connected phone in the Web UI or run `open-iphone-use new` (`add` is an
-   alias). `open-iphone-use bluetooth` lists candidates; `new --bt PEER_ID` selects an exact
-   peer. Bluetooth supplies owner device names where available; generic or duplicate names
-   get fallbacks. Do not infer identity from a name.
-3. Each phone gets a private sharing link and QR. Use Copy or, where supported, Share and
-   the system share sheet (including AirDrop where available). On first use install the
-   public CA on the phone, verify its SHA-256 fingerprint against the terminal, and enable
-   trust in **Settings → General → About → Certificate Trust Settings**. Open that phone's
-   link in Safari and approve **Start sharing**. Repeat for each phone.
+Setup registers the MCP server and agent skill for detected clients (Codex, Claude Code,
+Cursor, OpenCode, Command Code). Use an image-capable agent. The tools:
 
-The capture page requests video at an ideal **30 fps**; actual delivery depends on the
-phone and network. Capture links are credentials: keep them private. Only the owner pairs,
-trusts certificates, unlocks the phone and approves sharing. Bluetooth and fresh screen
-sharing are both required for control.
-
-```sh
-open-iphone-use devices                    # list registered phones
-open-iphone-use status --device DEVICE_ID  # inspect a phone
-open-iphone-use link DEVICE_ID             # show its link and QR again
-open-iphone-use remove DEVICE_ID           # remove phone and revoke its link
-open-iphone-use stop
-```
-
-`remove --device DEVICE_ID` is also supported. Removal cancels that phone's input and clears
-its frames and calibration; it does not remove its OS Bluetooth bond. See
-[headless server](docs/headless-server.md) for reconnect and network details.
-
-## Pointer and MCP
-
-The default auto-hiding AssistiveTouch pointer is supported. With Safari sharing visible,
-preparation measures seven samples on its calibration board and fits the visual pointer;
-a good fit is accepted immediately, while a poor fit is remeasured once. Compatible
-calibration is reused. Explicitly recalibrate with `ensure_session` or `prepare_session`
-using `recalibrate=true`, or Safari's **Calibrate pointer** button. After a failed automatic
-attempt, another automatic attempt can be made after three minutes; a failed explicit attempt
-preserves the stored mapping. Keep pointer appearance, tracking speed, Zoom and orientation
-stable.
-
-Coordinate taps use bounded corrections and learn consistent landing offsets. Results report
-whether the landing was visually verified, observed without verification, predicted, or blind;
-predicted and blind results are unverified. A tap is refused when an observed landing is over 3% off target, a hidden
-corrected pointer is predicted over 1% off, or an unseen pointer has untrusted calibration.
-Even a verified landing does not prove the intended UI changed: inspect the screen after
-**every action**.
-
-The portable MCP server exposes:
-
-- Device setup and status: `list_bluetooth_candidates`, `create_device`, `remove_device`,
+- **Setup and status:** `list_candidates`, `create_device` (with `udid`), `remove_device`,
   `list_devices`, `get_device_status`, `get_latest_screenshot`, `stop_control`.
-- Preparation and pointer: `ensure_session`, `prepare_session`, `pointer_quick_probe`,
-  `pointer_home`, `pointer_move`, `pointer_tap`, `move_pointer`, `click`, `set_page_board`.
-- Input and navigation: `type_text`, `send_key`, `scroll`, `swipe`, `advance_feed`.
+- **Input:** `ensure_session`, `pointer_tap`, `type_text`, `send_key`, `swipe`, `scroll`,
+  `advance_feed`. `send_key` also takes `home`, `lock`, `volume_up`, `volume_down`, `mute` and
+  `siri`.
 
-Select an explicit device and inspect its screenshot. Preparation takes its own fresh frames;
-other input requires a frame ID captured after that phone's last input, at most 120 seconds
-old, while screen sharing remains active with a frame received within five seconds. Results
-include image dimensions; coordinates are fractions of the full image. Input is serialized
-per device and released on cancellation. Stale frames and unavailable control are rejected;
-HID delivery alone does not establish UI success. Text uses the US ASCII layout, and iOS
-permissions, protected content and locking remain in force.
+How the tools work:
 
-macOS has been tested with an iPhone. Linux/BlueZ and Windows/WinRT backends exist and should
-work in principle, but have **not been tested on real hardware**; reports and pull requests
-are welcome. On macOS, two iPhones have been shared and connected at the same time, and a
-paired iPhone reconnected over Bluetooth within a few seconds after a server restart. See the
-[validation record](docs/web-server-validation.md) for what was actually tested.
+- **Coordinates:** fractions of the full returned image (`x = px / width`, `y = py / height`).
+- **Frames:** every action needs a frame ID captured after the phone's last input. Each action
+  returns a new frame, so the agent can check the result before the next step.
+- **Verifying results:** input is serialized per phone. An `ok: true` result does not prove the
+  UI changed, so inspect the returned screen after every action.
+- **iOS rules still apply:** the owner unlocks the phone, and iOS permissions and protected
+  content stay in force.
 
-Read the [changelog](CHANGELOG.md), [documentation](docs/), and
-[contributing guide](CONTRIBUTING.md).
+## Limits
+
+- One USB phone per server; more phones can join over Wi-Fi.
+- Tested on an iPhone 13 (iOS 27.0, USB and Wi-Fi) and an iPhone SE (iOS 27.0.1, USB), also
+  both at once.
+  Multi-touch and long sessions are not tested yet.
+- The screen stream will not start while an app is using the camera or microphone.
+- macOS only: the stream is decoded with VideoToolbox.
+
+See [how it works](docs/coredevice.md) for details and the validation record. Read the
+[changelog](CHANGELOG.md), [roadmap](ROADMAP.md) and [contributing guide](CONTRIBUTING.md).

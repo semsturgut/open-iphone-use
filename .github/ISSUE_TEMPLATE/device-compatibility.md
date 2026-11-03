@@ -5,20 +5,18 @@ title: 'Device: '
 labels: compatibility
 ---
 
-Mac model / architecture / macOS:
+Mac model / macOS / Xcode version:
 iPhone model / iOS:
 Open iPhone Use version / commit:
 MCP client / model:
-Screen source (Safari or native):
+Connection (USB or Wi-Fi):
 
-- Build / installation:
-- Bluetooth permission / pairing / AssistiveTouch:
-- HTTPS trust / screen sharing:
-- Calibration duration / actual target accuracy:
-- Keyboard / pointer / click:
-- List scrolling / video next and previous:
-- Stop / stale capture / reconnect:
+- Installation:
+- Phone listed / added / live screen (frame rate if known):
+- Taps / typing / hardware buttons:
+- Swipes / scrolling / feed next and previous:
+- Stop / reconnect after unplugging or sleep:
 
 Reproduction steps, observed result and remaining unknowns:
 
-Do not attach device identifiers, capture URLs/tokens, private keys or personal screen contents.
+Do not attach device identifiers, private keys or personal screen contents.

@@ -10,8 +10,7 @@ import stat
 
 from .jsonc import Document
 
-from .control import atomic_json
-from .bootstrap import private_file
+from .files import atomic_json, private_file
 from .permissions import secure_directory
 
 NAME='open-iphone-use'
@@ -122,7 +121,7 @@ def install_skill(home, source, manifest, uninstall=False):
         # setup's managed runtime source, editable checkout, then canonical installed copy.
         import sys
         sources=[Path(sys.executable).parent.parent.parent/'agent-skill.md',
-                 Path(__file__).resolve().parents[2]/'macos/Resources/open-iphone-use-skill/SKILL.md',canonical/'SKILL.md']
+                 Path(__file__).resolve().parents[2]/'skill/SKILL.md',canonical/'SKILL.md']
         source=next((p for p in sources if p.is_file()),None)
         if source is None: raise ValueError('Skill source not found; re-run setup or supply --skill PATH')
     content=Path(source).read_bytes()  # Read before removing stale aliases/copies.

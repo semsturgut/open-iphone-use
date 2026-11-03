@@ -31,14 +31,10 @@ if [ "$OIU_UNINSTALL" = 1 ]; then
         if [ -f "$OIU_INSTALL_ROOT/previous-cli-link" ]; then ln -s "$(cat "$OIU_INSTALL_ROOT/previous-cli-link")" "$OIU_BIN_DIR/open-iphone-use"; fi
     fi
     rm -rf "$OIU_INSTALL_ROOT"
-    echo 'Uninstalled managed runtime, CLI, and unchanged agent entries. Device state, CA, backups and user edits were preserved.'
+    echo 'Uninstalled managed runtime, CLI, and unchanged agent entries. Phone state, backups and user edits were preserved.'
     exit 0
 fi
-case "$(uname -s)" in
-    Darwin) OIU_OS=macos ;;
-    Linux) OIU_OS=linux ;;
-    *) echo 'Use setup.ps1 on Windows' >&2; exit 2 ;;
-esac
+[ "$(uname -s)" = Darwin ] || { echo 'Open iPhone Use runs on macOS (it needs Xcode 27).' >&2; exit 2; }
 if [ -e "$OIU_INSTALL_ROOT" ] && [ ! -f "$OIU_MARKER" ]; then
     echo "Refusing to overwrite unmanaged directory: $OIU_INSTALL_ROOT" >&2; exit 1
 fi
@@ -85,41 +81,11 @@ if ! command -v "$OIU_PYTHON" >/dev/null 2>&1 || ! "$OIU_PYTHON" -c 'import sys;
     UV_PYTHON_INSTALL_DIR="$OIU_INSTALL_ROOT/python" "$OIU_UV" python install 3.12
     OIU_PYTHON=$(UV_PYTHON_INSTALL_DIR="$OIU_INSTALL_ROOT/python" "$OIU_UV" python find --managed-python 3.12)
 fi
-if [ "$OIU_OS" = macos ]; then
-    if [ -n "${OIU_MAC_HELPER_PREBUILT:-}" ] && [ -f "$OIU_MAC_HELPER_PREBUILT" ] && [ -x "$OIU_MAC_HELPER_PREBUILT" ]; then
-        OIU_NATIVE_HELPER=$OIU_MAC_HELPER_PREBUILT
-    else
-        command -v swift >/dev/null 2>&1 || { echo 'Install Xcode/Swift 6 (xcode-select --install), then re-run setup.' >&2; exit 1; }
-        # Xcode/SDK installation and its license approval remain owner actions.
-        if [ "${OIU_SWIFT_DISABLE_SANDBOX:-0}" = 1 ]; then
-            swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --product open-iphone-use-headless --disable-sandbox --cache-path "$OIU_TMP/swift-cache"
-            OIU_NATIVE_DIR=$(swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --show-bin-path --disable-sandbox --cache-path "$OIU_TMP/swift-cache")
-        else
-            swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --product open-iphone-use-headless
-            OIU_NATIVE_DIR=$(swift build --package-path "$OIU_SOURCE_DIR/macos" -c release --show-bin-path)
-        fi
-        OIU_NATIVE_HELPER="$OIU_NATIVE_DIR/open-iphone-use-headless"
-    fi
-else
-    if ! command -v bluetoothctl >/dev/null 2>&1; then
-        if command -v apt-get >/dev/null 2>&1; then sudo apt-get update; sudo apt-get install -y bluez dbus
-        elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y bluez dbus
-        elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --needed bluez bluez-utils dbus
-        else echo 'Install BlueZ and D-Bus using your OS package manager, then re-run setup.' >&2; exit 1
-        fi
-    fi
-    if command -v systemctl >/dev/null 2>&1 && ! systemctl is-active --quiet bluetooth; then sudo systemctl enable --now bluetooth; fi
-fi
 "$OIU_PYTHON" -m venv "$OIU_INSTALL_ROOT/venv"
 "$OIU_INSTALL_ROOT/venv/bin/python" -m pip install --upgrade pip
 "$OIU_INSTALL_ROOT/venv/bin/python" -m pip install --upgrade "$OIU_SOURCE_DIR/server"
-if [ "$OIU_OS" = macos ]; then
-    cp "$OIU_NATIVE_HELPER" "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless.new"
-    chmod 755 "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless.new"
-    mv "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless.new" "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use-headless"
-fi
 cp "$OIU_SOURCE_DIR/setup.sh" "$OIU_INSTALL_ROOT/setup.sh"
-cp "$OIU_SOURCE_DIR/macos/Resources/open-iphone-use-skill/SKILL.md" "$OIU_INSTALL_ROOT/agent-skill.md"
+cp "$OIU_SOURCE_DIR/skill/SKILL.md" "$OIU_INSTALL_ROOT/agent-skill.md"
 # Remove the old template name; registration installs only the canonical skill.
 rm -f "$OIU_INSTALL_ROOT/SKILL.md"
 ln -sfn "$OIU_INSTALL_ROOT/venv/bin/open-iphone-use" "$OIU_BIN_DIR/open-iphone-use"

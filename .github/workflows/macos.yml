@@ -1,50 +1,37 @@
-name: Mac bridge
+name: Server checks
 on:
   push:
-    paths: ['macos/**', 'server/**', 'setup.sh', 'setup.ps1', 'install.sh', '.github/workflows/macos.yml']
+    paths: ['server/**', 'skill/**', 'setup.sh', 'install.sh', '.github/workflows/macos.yml']
   pull_request:
-    paths: ['macos/**', 'server/**', 'setup.sh', 'setup.ps1', 'install.sh', '.github/workflows/macos.yml']
+    paths: ['server/**', 'skill/**', 'setup.sh', 'install.sh', '.github/workflows/macos.yml']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   check:
     runs-on: macos-15
-    defaults:
-      run:
-        working-directory: macos
     steps:
       - uses: actions/checkout@v4
-      - uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '26.2'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: swift test
-      - run: node scripts/test-capture-page.mjs
-      - run: python3 scripts/test-agent-mcp.py .build/debug/open-iphone-use-mcp
-      - name: Build managed CLI runtime through setup
+      - name: Install through setup
         env:
           OIU_INSTALL_ROOT: ${{ runner.temp }}/oiu-runtime
           OIU_BIN_DIR: ${{ runner.temp }}/oiu-bin
           OIU_SOURCE_DIR: ${{ github.workspace }}
-        run: sh ../setup.sh --no-agents
-      - name: Portable server tests
-        run: |
-          "$RUNNER_TEMP/oiu-runtime/venv/bin/python" -m pip install 'dbus-fast>=5.2,<6'
-          PYTHONPATH=../server "$RUNNER_TEMP/oiu-runtime/venv/bin/python" -m unittest discover -s ../server/tests -v
-      - name: Install and uninstall from local archives
-        working-directory: ${{ github.workspace }}
+        run: sh setup.sh --no-agents
+      - name: Server tests
+        run: PYTHONPATH=server "$RUNNER_TEMP/oiu-runtime/venv/bin/python" -m unittest discover -s server/tests -v
+      - run: node --check server/oiu/web/app.js
+      - name: Install and uninstall from a local archive
         run: |
           set -eu
           export HOME="$RUNNER_TEMP/oiu-install-home"
           export OIU_INSTALL_ROOT="$HOME/runtime" OIU_BIN_DIR="$HOME/bin"
-          mkdir -p "$HOME" "$HOME/assets"
+          mkdir -p "$HOME/assets"
           git archive --format=tar.gz --prefix=source/ HEAD -o "$HOME/assets/source.tar.gz"
-          tar -czf "$HOME/assets/helper.tar.gz" -C "$RUNNER_TEMP/oiu-runtime/venv/bin" open-iphone-use-headless
-          shasum -a 256 "$HOME/assets/helper.tar.gz" > "$HOME/assets/helper.tar.gz.sha256"
-          export OIU_ARCHIVE_URL="file://$HOME/assets/source.tar.gz" OIU_HELPER_URL="file://$HOME/assets/helper.tar.gz"
+          export OIU_ARCHIVE_URL="file://$HOME/assets/source.tar.gz"
           bash install.sh --version vTEST --no-agents
           "$OIU_BIN_DIR/open-iphone-use" --help
           bash install.sh --uninstall

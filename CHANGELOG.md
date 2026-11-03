@@ -1,6 +1,23 @@
 # Changelog
 
+## 0.1.0 — USB and Wi-Fi control through CoreDevice (unreleased)
+
+- Control phones through Xcode's CoreDevice services: the HEVC screen stream Xcode mirrors
+  (about 45 fps over USB), exact touches, a virtual keyboard and hardware buttons. Needs
+  Xcode 27, iOS 27 and Developer Mode. USB uses a rootless in-process tunnel; Wi-Fi rides the
+  tunnel macOS keeps for a wirelessly paired phone (about 12 fps in a first test).
+- `open-iphone-use new` adds a connected phone; `candidates` lists them with name, iOS and
+  connection. The Web UI streams each phone live; click the screen to tap.
+- MCP: `list_candidates` and `create_device(udid)`; `send_key` presses hardware buttons.
+  Removed the pointer and calibration tools (`move_pointer`, `pointer_home`, `set_page_board`,
+  `pointer_quick_probe`, `prepare_session`) and `list_bluetooth_candidates`.
+- Removed Bluetooth HID, Safari screen sharing, pointer calibration, the LAN HTTPS receiver
+  and its certificates, the Swift helper, and Linux/Windows support. For Xcode 26 / iOS 26,
+  install v0.0.3. Phones added under earlier releases are dropped from the saved state.
+- Verified on an iPhone 13 (iOS 27.0, USB and Wi-Fi) and an iPhone SE (iOS 27.0.1, USB).
+
 ## 0.0.3 — CLI-first multi-iPhone release (unreleased)
+
 
 - Add a curl installer with verified prebuilt macOS helper, source fallback, offline uninstall,
   and release asset workflow.

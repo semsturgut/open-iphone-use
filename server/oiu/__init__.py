@@ -1,1 +1,1 @@
-"""Portable Open iPhone Use service. No GUI or Bluetooth dependency at import time."""
+"""Open iPhone Use: let AI agents use an iPhone over USB or Wi-Fi through CoreDevice."""

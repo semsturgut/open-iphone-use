@@ -12,52 +12,54 @@ from .cli import call
 from .core import ACTIONS, PREPARATION
 
 PARAMETERS = {
-    "move_pointer": {"dx": "integer", "dy": "integer"},
-    "click": {"button": "string"}, "scroll": {"dy": "integer"},
+    "click": {}, "scroll": {"dy": "integer"},
     "type_text": {"text": "string"}, "send_key": {"key": "string"},
     "pointer_tap": {"x": "number", "y": "number"}, "pointer_move": {"x": "number", "y": "number"},
     "swipe": {"profile": "string"}, "advance_feed": {"dy": "integer"},
-    "set_page_board": {"aim": "boolean"},
-    "ensure_session": {"return_app": "string", "recalibrate": "boolean"}, "prepare_session": {"return_app": "string", "recalibrate": "boolean"},
+    "ensure_session": {"return_app": "string"},
+}
+FRACTION = '{axis} is a fraction of the FULL returned image: pixel coordinate divided by image {size}; origin is top-left.'
+DESCRIPTIONS = {
+    'list_devices': 'List added phones with device_id, name, connection status and frame age.',
+    'list_candidates': 'List connected phones (USB or Wi-Fi) with udid, name, iOS version and whether they are already added. Never guess a udid.',
+    'create_device': 'Add the phone with this udid from list_candidates. Its screen streams live; no calibration is needed.',
+    'remove_device': 'Remove the explicitly selected phone and stop its control. Use only when the user requests removal.',
+    'get_device_status': 'Connection details for the selected phone: USB or Wi-Fi, whether input is available, and errors.',
+    'get_latest_screenshot': 'Read the selected phone screenshot and frame age. For input use an ID captured after this device’s last input completed, at most 120 seconds old.',
+    'stop_control': 'Cancel the running action on the selected phone and release any held touch or key.',
+    'ensure_session': 'Check that input is available for the selected phone. Optional return_app opens that app through Spotlight.',
+    'pointer_tap': 'Touch the exact point given. Check the returned screen for the UI outcome.',
+    'pointer_move': 'Set the point that click touches; nothing is touched.',
+    'click': 'Touch the point set by pointer_move.',
+    'type_text': 'Type US-layout ASCII text with the phone\'s keyboard focus, at most 500 bytes.',
+    'send_key': 'Press a key or chord, e.g. return, escape, cmd+space. home, lock, volume_up, volume_down, mute and siri press hardware buttons.',
+    'scroll': 'Scroll by dragging a finger; positive dy moves content up (like the wheel), magnitude up to 1200. Verify the result on the returned screen.',
+    'swipe': 'Swipe with profile up, down, left or right across the middle of the screen.',
+    'advance_feed': 'Advance to the NEXT item in a vertical feed with dy=1 (upward swipe); dy=-1 returns to the previous item. Inspect creator/title afterward.',
 }
 
 
 def tools():
     result = []
-    for name in ["list_devices", "list_bluetooth_candidates", "create_device", "remove_device", "get_device_status", "get_latest_screenshot", "stop_control", *sorted(ACTIONS)]:
-        props = {} if name in ("list_devices", "list_bluetooth_candidates") else {"device_id": {"type": "string"}}
-        if name == 'create_device': props = {'bt_id': {'type': 'string'}}
+    for name in ["list_devices", "list_candidates", "create_device", "remove_device", "get_device_status", "get_latest_screenshot", "stop_control", *sorted(ACTIONS)]:
+        props = {} if name in ("list_devices", "list_candidates") else {"device_id": {"type": "string"}}
+        if name == 'create_device': props = {'udid': {'type': 'string'}}
         if name in ACTIONS:
             props["expected_frame_id"] = {"type": "string", "description": "ID of a screenshot from this device after its last input completed, at most 120 seconds old. The frameID that an action's own result returns is valid for the next action, so a new get_latest_screenshot per action is not needed; a frame captured before the last input completed is rejected."}
             props.update({key: {"type": kind} for key, kind in PARAMETERS.get(name, {}).items()})
         if name in ('pointer_tap', 'pointer_move'):
-            for axis in ('x', 'y'):
-                props[axis]['description'] = f'{axis} is a fraction of the FULL returned image: pixel coordinate divided by image width for x or image height for y; origin is top-left.'
+            props['x']['description'] = FRACTION.format(axis='x', size='width')
+            props['y']['description'] = FRACTION.format(axis='y', size='height')
         optional = {'expected_frame_id'} if name in PREPARATION else set()
-        if name in ('ensure_session', 'prepare_session'): optional.update(('return_app', 'recalibrate'))
-        result.append(dict(name=name, description=f"{name.replace('_', ' ')}. Choose a device explicitly; inspect each resulting screen. HID acceptance does not prove UI success.",
-                           inputSchema=dict(type="object", properties=props, required=[p for p in props if p not in optional], additionalProperties=False)))
-        if name == 'scroll':
-            result[-1]['description'] = 'Send raw HID wheel ticks. Positive dy moves content up/advances on iOS, matching native macOS. App sensitivity varies; use modest values and verify reel identity, not video animation or ok:true.'
-        if name == 'advance_feed':
-            result[-1]['description'] = 'Advance to the NEXT item with dy=1 (upward drag); dy=-1 returns to the previous item. Presses, drags and releases open-loop with calibration (or a compatible fallback) and never wait for the pointer to be visible, so it works over video apps. Inspect creator/title afterward; HID acceptance is not a transition count.'
-        if name in ('ensure_session', 'prepare_session'):
-            props['recalibrate']['description'] = 'Set true to explicitly measure a fresh calibration, including after a failed automatic attempt; the stored mapping is preserved if calibration fails.'
-            result[-1]['description'] = 'Prepare the pointer: a compatible, non-suspect calibration is reused; otherwise the Safari sharing tab is brought to the front and calibrated. Set recalibrate=true to explicitly recalibrate. Failed automatic attempts may be retried after three minutes. Calibration accepts a good fit immediately and remeasures once if poor. Optional return_app reopens that app via Spotlight after preparation.'
-        if name in ('pointer_tap', 'pointer_move'):
-            result[-1]['description'] += ' Uses bounded corrections and learns consistent landing offsets. A tap is refused if the observed landing is over 3% from the target or a hidden corrected pointer is predicted over 1% away; a never-observed pointer requires trusted calibration. Inspect click_sent, verified, landing, predicted_landing and observation_method: predicted and blind landings are unverified, and even an observed landing may miss. Check the returned screen for the UI outcome.'
-        if name == 'get_latest_screenshot':
-            result[-1]['description'] = 'Read the selected phone screenshot and frame age. For input use an ID captured after this device’s last input completed, at most 120 seconds old. Screen sharing must still be active (latest frame within five seconds).'
+        if name == 'ensure_session': optional.add('return_app')
+        description = DESCRIPTIONS[name] + ' Choose a device explicitly; an accepted action does not prove the UI changed, so inspect each resulting screen.'
         if name in ('get_latest_screenshot', *ACTIONS):
-            result[-1]['description'] += ' Returned frame metadata includes actual width and height in pixels. Coordinates use the full image: x=px/width, y=py/height, origin top-left.'
+            description += ' Returned frame metadata includes actual width and height in pixels. Coordinates use the full image: x=px/width, y=py/height, origin top-left.'
         if name in ('swipe', 'advance_feed', 'scroll'):
-            result[-1]['description'] += ' The UI may still be animating; take a fresh screenshot before targeting.'
-        if name == 'create_device':
-            result[-1]['description'] = 'Create a phone bound to the explicitly selected Bluetooth HID peer from list_bluetooth_candidates. Returns its private capture_path; combine with setup capture_origin. Bluetooth must be connected before adding.'
-        if name == 'list_bluetooth_candidates':
-            result[-1]['description'] = 'List connected Bluetooth HID phones, their names, availability and exact bt_id (id). Pairing in AssistiveTouch is required; never guess a peer.'
+            description += ' The UI may still be animating; take a fresh screenshot before targeting.'
+        result.append(dict(name=name, description=description,
+                           inputSchema=dict(type="object", properties=props, required=[p for p in props if p not in optional], additionalProperties=False)))
         if name == 'remove_device':
-            result[-1]['description'] = 'Remove the explicitly selected phone, revoke its sharing link and cancel control. Use only when the user requests removal; OS Bluetooth pairing is retained.'
             result[-1]['annotations'] = dict(destructiveHint=True, readOnlyHint=False)
     return result
 
@@ -67,8 +69,8 @@ def handle(args, method, params):
         requested = params.get("protocolVersion")
         version = requested if requested in ("2024-11-05", "2025-03-26", "2025-06-18") else "2024-11-05"
         return dict(protocolVersion=version, capabilities={"tools": {}},
-                    serverInfo={"name": "open-iphone-use-portable", "version": "0.0.3"},
-                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Returned images include actual pixel width and height. For coordinates use x=px/width and y=py/height over the full image, origin top-left. After swipe, advance_feed or scroll, take a fresh screenshot before targeting because UI may still be animating. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary; a frame captured before the last input completed is rejected. Screen sharing must remain active with a frame in the last five seconds. Red Bluetooth/screen sharing status means control will not work. Owner pairing/sharing/unlocking is required.")
+                    serverInfo={"name": "open-iphone-use", "version": "0.1.0"},
+                    instructions="Phones connect to the Mac by USB or Wi-Fi. To add one, list_candidates and create_device with its udid; then list_devices and choose the intended device_id. ensure_session needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Returned images include actual pixel width and height. For coordinates use x=px/width and y=py/height over the full image, origin top-left. Touches land exactly where given. After swipe, advance_feed or scroll, take a fresh screenshot before targeting because UI may still be animating. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary. The screen must be live (a frame within five seconds). The owner unlocks the phone; iOS permissions still apply.")
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -89,11 +91,10 @@ def handle(args, method, params):
                 raise ValueError(f"Invalid {key}")
         if name == "list_devices":
             result = call(args, "/api/devices")
-        elif name == 'list_bluetooth_candidates':
-            result = call(args, '/api/bluetooth')
+        elif name == 'list_candidates':
+            result = call(args, '/api/candidates')
         elif name == 'create_device':
-            result = call(args, '/api/devices', {'bt_id': arguments['bt_id']})
-            result['capture_url'] = call(args, '/api/setup')['capture_origin'] + result['capture_path']
+            result = call(args, '/api/devices', arguments)
         else:
             device = arguments.pop("device_id")
             if not device.isalnum():
@@ -125,7 +126,7 @@ def handle(args, method, params):
 
 def configure_logging(args):
     from .permissions import secure_directory
-    from .bootstrap import private_file
+    from .files import private_file
     try:
         directory=Path(args.state)
         secure_directory(directory)

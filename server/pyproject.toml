@@ -4,16 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-iphone-use-server"
-version = "0.0.3"
+version = "0.1.0"
 requires-python = ">=3.11"
-description = "Portable, local multi-iPhone capture and control server"
+description = "Let AI agents use your iPhone over USB or Wi-Fi through Xcode's CoreDevice services"
 dependencies = [
-    "cryptography>=44,<51", "Pillow>=11,<14", "tomlkit>=0.13,<1",
-    "dbus-fast>=5.2,<6; sys_platform == 'linux'",
-    "winrt-runtime>=4,<5; sys_platform == 'win32'",
-    "winrt-Windows.Devices.Bluetooth>=4!0,<5!0; sys_platform == 'win32'",
-    "winrt-Windows.Devices.Bluetooth.GenericAttributeProfile>=4!0,<5!0; sys_platform == 'win32'",
-    "winrt-Windows.Storage.Streams>=4!0,<5!0; sys_platform == 'win32'",
+    "Pillow>=11,<14", "tomlkit>=0.13,<1",
+    # CoreDevice: rootless RSD tunnel, VideoToolbox stream decode and HID.
+    "pymobiledevice3>=11.49,<12",
 ]
 
 [project.scripts]
