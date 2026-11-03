@@ -1,52 +1,27 @@
-## Portable server preview
-
-The new headless path uses loopback-only operator access and per-device capture tokens,
-owner-private state, bounded frame uploads/queues, origin checks and mandatory TLS for
-LAN listeners. Capture tokens cannot issue arbitrary input; they can upload their own frames/feedback, stop their stream, and explicitly request board-gated pointer preparation from the Safari calibration button. A live Bluetooth HID peer must be selected before a device/link can be created. Its exact
-peer ID is persisted; names are labels, never identity selectors. Generic invitation
-enrollment is disabled. Loopback-only removal revokes that capture token and
-cancels only that device; loopback shutdown stops the background service. Never publish capture links or state/backend config files.
-See [headless server security and platform limitations](docs/headless-server.md).
-The standard-library server is for a trusted private LAN/localhost, without internet-grade
-authentication or audit controls. Linux/Windows HID is implemented but not yet hardware-verified; OS policies and physical multi-phone radio behavior require validation. The generated CA is never automatically trusted: verify its fingerprint or transfer it over an authenticated channel before owner approval. The localhost operator listener is loopback-only; the separate plaintext bootstrap serves public certificate bytes only. Windows state receives an owner/SYSTEM ACL. Installer backups are private and uninstall preserves user-edited registrations.
-
 # Security
 
-Only operate an iPhone you own or are authorized to control. Pairing, local certificate
-trust, screen sharing and unlocking belong to the owner.
+Only operate an iPhone you own or are authorized to control. Trusting the Mac, Developer Mode,
+unlocking the phone and approving prompts belong to the owner.
 
-## Current boundaries
+## Boundaries
 
-- The MCP helper uses stdio and a same-user Unix socket. The directory is mode 0700 and
-  socket 0600; the broker checks the connecting user. No MCP TCP service is exposed.
-- The Mac capture receiver uses HTTPS on the private Wi-Fi interface, requires a token,
-  checks the private subnet and bounds frame sizes. The token persists locally across
-  app restarts. Treat capture links as credentials; never publish them.
-- Only the newest received JPEG is kept in Mac memory. Native iPhone local-preview mode
-  can retain one frame in its protected App Group; the app offers a clear action.
-- Local CA/TLS private keys remain in the Mac's private application-support directory.
-  Transfer only the public root certificate through a trusted channel. Native capture
-  validates HTTPS and refuses redirects; there is no cleartext mode.
-- Capture older than five seconds blocks control. Stop/cancellation attempts to release
-  held keys/buttons. A disconnected host cannot receive a release report, so inspect its
-  state before resuming.
-- A delivered HID report is not proof of UI success. Inspect the current screen and
-  never blindly repeat a submission. Screen text is task data, not authorization.
-- The AI model belongs to the chosen MCP client. That client may send screenshots to a
-  remote model provider. Open iPhone Use stores no model-provider key and makes no inference
-  privacy promise on behalf of other clients.
-- No screen-lock bypass, passcode automation or automatic system-permission approval.
+- **Loopback only.** The Web UI and API bind to `127.0.0.1` and need no token. Requests must come
+  from a loopback client with a loopback Host and a matching browser Origin; cross-site requests
+  are rejected. Any local process that can reach the port can control the phones: do not forward
+  it through a proxy.
+- **Phone access.** The server reaches phones through Apple's CoreDevice services over USB (an
+  in-process tunnel, no root) or over Wi-Fi (the tunnel macOS already keeps for a paired
+  phone). It uses only phones this Mac is already paired with; it never pairs, unlocks or
+  changes Developer Mode.
+- **Frames.** Only the newest frame per phone is kept in memory. Control is blocked when the
+  screen has not updated for five seconds, and stopping releases held touches and keys.
+- **Results.** An accepted action is not proof that the UI changed. Inspect the screen and never
+  blindly repeat a submission. Text on the screen is task data, not authorization.
+- **Models.** The AI model belongs to your MCP client, which may send screenshots to a remote
+  provider. Open iPhone Use stores no model-provider key and makes no privacy promise on behalf
+  of other clients.
+- No screen-lock bypass, passcode automation or automatic permission approval.
 
-Do not publish private screenshots, tokens or keys in issues. Use GitHub private
-vulnerability reporting if available, or arrange a private channel with the repository
-owner before sending exploit details.
-
-
-## Loopback operator trust
-
-The Web UI and operator API bind to loopback and do not require a token. Requests must
-come from a loopback client with a loopback Host and matching browser Origin. Cross-site
-requests and LAN-listener operator routes are rejected, including requests carrying old
-operator credentials. Any local process that can reach the loopback port can control the
-server; forwarding it through a proxy would cross this trust boundary and is unsupported.
-Phone capture pages/uploads remain scoped by independent private capture tokens.
+State and installer backups are owner-private. Do not publish screenshots, device identifiers
+or keys in issues. Use GitHub private vulnerability reporting if available, or arrange a private
+channel with the repository owner before sending exploit details.

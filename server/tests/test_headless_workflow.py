@@ -1,4 +1,4 @@
-"""Bluetooth-first lifecycle, daemon control and independent terminal QR checks."""
+"""Detached daemon lifecycle: start, single owner, CLI access and stop."""
 import json
 import os
 from pathlib import Path
@@ -9,7 +9,6 @@ import time
 import unittest
 import re
 import signal
-from oiu.qr import matrix, terminal
 from oiu.state import StateLease
 
 
@@ -40,21 +39,18 @@ class HeadlessWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = [sys.executable,'-m','oiu.cli','--state',directory]
             try:
-                started = start_with_diagnostics(base+['serve','--local-http','--capture-only','--port','0'],directory)
+                started = start_with_diagnostics(base+['serve','--no-control','--port','0'],directory)
                 self.assertIn('Open iPhone Use is running',started.stdout)
                 self.assertNotIn('#',started.stdout)
                 self.assertNotIn('token',started.stdout.lower())
                 self.assertIn('Log:',started.stdout)
                 log=Path(directory)/'server.log'
                 self.assertEqual(log.stat().st_mode & 0o777,0o600)
-                duplicate=subprocess.run(base+['serve','--local-http','--capture-only','--port','0'],
+                duplicate=subprocess.run(base+['serve','--no-control','--port','0'],
                                          capture_output=True,text=True,timeout=15)
                 self.assertNotEqual(duplicate.returncode,0)
                 listed=subprocess.run(base+['devices'],check=True,capture_output=True,text=True)
                 self.assertEqual(json.loads(listed.stdout),[])
-                no_bt=subprocess.run(base+['new','--bt','peer'],capture_output=True,text=True)
-                self.assertNotEqual(no_bt.returncode,0)
-                self.assertIn('Bluetooth',no_bt.stderr)
                 stopped=subprocess.run(base+['stop'],check=True,capture_output=True,text=True,timeout=15)
                 self.assertTrue(json.loads(stopped.stdout)['ok'])
                 deadline=time.monotonic()+5
@@ -64,7 +60,5 @@ class HeadlessWorkflowTests(unittest.TestCase):
                     except ValueError:
                         if time.monotonic()>=deadline: raise
                         time.sleep(.05)
-                token=json.loads((Path(directory)/'state.json').read_text())['admin_token']
-                self.assertNotIn(token,log.read_text())
             finally:
                 subprocess.run(base+['stop'],capture_output=True,text=True,timeout=10)

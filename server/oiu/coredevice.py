@@ -18,7 +18,7 @@ import time
 import uuid
 
 from . import vision
-from .hid import chord, fraction, stroke
+from .keys import chord, fraction, stroke
 
 UNIT = 65535
 HID_SERVICE = 'com.apple.coredevice.hid.universalhidservice'
@@ -33,21 +33,20 @@ BUTTONS = dict(home=(0x0C, 0x40), home_button=(0x0C, 0x40), lock=(0x0C, 0x30), v
                volume_down=(0x0C, 0xEA), mute=(0x0C, 0xE2), siri=(0x0C, 0xCF))
 # A static screen sends no new video frames; resend the last one so captures stay fresh.
 STILL_FRAME_SECONDS = .5
-# PyTCP's userspace stack is a process-global singleton: one tunnel, so one phone, per server.
-_tunnel = threading.Lock()
+# PyTCP's userspace stack is a process-global singleton: one USB tunnel, so one USB phone, per
+# server. Wi-Fi phones ride remoted's tunnels and are not limited.
+_usb_tunnel = threading.Lock()
+USB_BUSY = 'Another phone already uses this server\'s USB connection; remove it or connect this phone over Wi-Fi'
+
 
 
 def units(value):
     return round(fraction(value) * UNIT)
 
 
-def usages(report):
-    """Usage set held by an 8-byte keyboard report from hid.chord/keyboard."""
-    return tuple(0xE0 + bit for bit in range(8) if report[0] >> bit & 1) + ((report[2],) if report[2] else ())
-
-
 def held(modifier, usage):
-    return usages(bytes([modifier, 0, usage]))
+    """HID keyboard usages held for a (modifier bits, usage) stroke: modifiers are 0xE0 + bit."""
+    return tuple(0xE0 + bit for bit in range(8) if modifier >> bit & 1) + ((usage,) if usage else ())
 
 
 def jpeg(image_bytes=None, bgra=None, size=None):
@@ -60,13 +59,33 @@ def jpeg(image_bytes=None, bgra=None, size=None):
 
 
 def candidates():
-    """USB-attached phones by UDID. Pairing and Developer Mode are checked when control starts."""
+    """Paired physical phones reachable now, over USB or Wi-Fi (Xcode's devicectl), else USB only."""
+    import json, subprocess, tempfile
+    with tempfile.NamedTemporaryFile(suffix='.json') as output:
+        try:
+            subprocess.run(['xcrun', 'devicectl', 'list', 'devices', '--quiet', '--json-output', output.name],
+                           check=True, capture_output=True, timeout=20)
+            devices = json.load(open(output.name))['result']['devices']
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+            return usb_candidates()
+    transports = dict(wired='USB', localNetwork='Wi-Fi')
+    return [dict(udid=d['hardwareProperties']['udid'], name=d['deviceProperties'].get('name'),
+                 ios=d['deviceProperties'].get('osVersionNumber'), model=d['hardwareProperties'].get('productType'),
+                 connection=transports[d['connectionProperties']['transportType']])
+            for d in devices
+            if d.get('hardwareProperties', {}).get('reality') == 'physical'
+            and d.get('connectionProperties', {}).get('pairingState') == 'paired'
+            and d['connectionProperties'].get('transportType') in transports]
+
+
+def usb_candidates():
     try:
         from pymobiledevice3.usbmux import list_devices
     except ImportError:
         raise ValueError(MISSING_DEPENDENCY) from None
+
     async def listing():
-        return [dict(udid=d.serial, connection=d.connection_type, **await details(d.serial))
+        return [dict(udid=d.serial, connection='USB', **await details(d.serial))
                 for d in await list_devices() if d.is_usb]
     return asyncio.run(listing())
 
@@ -149,7 +168,7 @@ def stream_connection():
             require_video_stream_support(self._rsd)
             self.service = DisplayService(self._rsd)
             await self.service.connect()
-            self.transport, receiver = open_media_receiver(self.service, (8 * 1024 * 1024, 4 * 1024 * 1024))
+            self.transport, receiver = self.media_receiver()
             answer = await asyncio.wait_for(self.service.start_video_stream(
                 receiver_ip=receiver, receiver_port=self.transport.port, sender_ip=self._sender_ip,
                 display_id=self._display_id, client_session_id=uuid.uuid4()), 15)
@@ -164,6 +183,22 @@ def stream_connection():
                           asyncio.create_task(self._decoder_refresh_loop()),
                           asyncio.create_task(self._rtcp_send_loop(self.transport))]
             await asyncio.sleep(TOUCH_AUTH_SETTLE_SECONDS)
+
+        def media_receiver(self):
+            """Where the phone sends RTP. pymobiledevice3 chooses the userspace stack whenever any
+            userspace tunnel is open in this process, but a Wi-Fi phone on remoted's tunnel can only
+            reach a host kernel socket, so decide by this phone's own tunnel."""
+            if self._rsd.is_in_process_tunnel:
+                return open_media_receiver(self.service, (8 * 1024 * 1024, 4 * 1024 * 1024))
+            import socket
+            from pymobiledevice3.remote.core_device.screen_stream import _KernelUdp
+            sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            sock.bind(('::', 0))
+            for size in (8 * 1024 * 1024, 4 * 1024 * 1024):
+                with contextlib.suppress(OSError):
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, size)
+                    break
+            return _KernelUdp(sock), self.service.service.local_address[0]
 
         def _broadcast_frame(self, bgra):
             super()._broadcast_frame(bgra)
@@ -229,12 +264,35 @@ def stream_connection():
 
 
 @contextlib.asynccontextmanager
-async def open_connection(udid):
+async def tunnel(udid):
+    """USB: our own rootless userspace tunnel. Wi-Fi: ride the tunnel macOS's remoted already
+    keeps to a wirelessly paired phone (no root); remoted may briefly take its RSD connection back,
+    and the backend then reconnects."""
     try:
         from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
+        from pymobiledevice3.usbmux import list_devices
     except ImportError:
         raise OSError(MISSING_DEPENDENCY) from None
-    async with UserspaceRsdTunnel(serial=udid) as rsd:
+    if any(d.serial == udid and d.is_usb for d in await list_devices()):
+        if not _usb_tunnel.acquire(blocking=False): raise OSError(USB_BUSY)
+        try:
+            async with UserspaceRsdTunnel(serial=udid) as rsd:
+                yield rsd, 'USB'
+        finally:
+            _usb_tunnel.release()
+        return
+    from pymobiledevice3.remote.native_tunnel import NativeRemotedTunnel
+    native = NativeRemotedTunnel(serial=udid)
+    rsd = await native.aopen()
+    try:
+        yield rsd, 'Wi-Fi'
+    finally:
+        await native.aclose()
+
+
+@contextlib.asynccontextmanager
+async def open_connection(udid):
+    async with tunnel(udid) as (rsd, transport):
         services = rsd.peer_info.get('Services', {})
         connection = ScreenshotConnection(rsd)
         if HID_SERVICE in services and DISPLAY_SERVICE in services:
@@ -246,6 +304,7 @@ async def open_connection(udid):
                 await stream.aclose()
                 connection = ScreenshotConnection(rsd, 'The screen stream that authorizes input did not start: '
                                                        + (str(error) or type(error).__name__))
+        connection.transport = transport
         try:
             yield connection
         finally:
@@ -257,8 +316,6 @@ class CoreDeviceBackend:
     RETRY_SECONDS = 2
 
     def __init__(self, device, udid, opener=open_connection):
-        if not _tunnel.acquire(blocking=False):
-            raise ValueError('Only one CoreDevice phone per server is supported')
         self.device, self.udid, self.opener = device, udid, opener
         self.condition = threading.Condition()
         self.connection = None
@@ -278,9 +335,9 @@ class CoreDeviceBackend:
     @property
     def label(self):
         connection = self.connection
-        if self.error or connection is None: return 'CoreDevice: ' + (self.error or 'reconnecting')
-        if not connection.hid_available: return 'CoreDevice screen only: ' + connection.reason
-        return 'CoreDevice connected'
+        if self.error or connection is None: return 'Not connected: ' + (self.error or 'reconnecting')
+        if not connection.hid_available: return 'Screen only: ' + connection.reason
+        return 'Connected over ' + getattr(connection, 'transport', 'USB')
 
     def is_fresh(self):
         return bool(not self.closed and self.at and time.monotonic() - self.at <= 5)
@@ -345,30 +402,24 @@ class CoreDeviceBackend:
         return self.connection
 
     async def perform(self, connection, operation, args):
-        if operation in ('ensure_session', 'prepare_session', 'pointer_quick_probe'):
+        if operation == 'ensure_session':
             await connection.touch_service()
             app = args.get('return_app')
             if app is not None:
-                await connection.press(usages(chord('cmd+space'))); await asyncio.sleep(.6)
+                await connection.press(held(*chord('cmd+space'))); await asyncio.sleep(.6)
                 for character in app + '\n':
                     await connection.press(held(*stroke(character)))
                 await asyncio.sleep(.5)
-            return 'Absolute CoreDevice touch is ready; no calibration is needed'
-        if operation == 'set_page_board': return 'CoreDevice needs no calibration board'
-        if operation == 'pointer_home':
-            self.point = (0., 0.)
-            return 'Touch target reset to the top-left corner'
-        if operation == 'move_pointer':
-            raise ValueError('CoreDevice touches are absolute; use pointer_move or pointer_tap with x and y')
+            return 'Input is ready'
         if operation == 'pointer_move':
             self.point = (fraction(args['x']), fraction(args['y']))
             return 'Touch target set to (%s,%s); nothing was touched' % self.point
         if operation in ('pointer_tap', 'click'):
             if operation == 'click' and args.get('button', 'left') != 'left':
-                raise ValueError('CoreDevice supports a primary touch only')
+                raise ValueError('Only a primary touch is supported')
             if operation == 'pointer_tap': self.point = (fraction(args['x']), fraction(args['y']))
             await connection.tap(units(self.point[0]), units(self.point[1]))
-            return 'Touched (%s,%s) with an absolute CoreDevice touch' % self.point
+            return 'Touched (%s,%s)' % self.point
         if operation == 'type_text':
             text = args['text']
             if not isinstance(text, str) or len(text.encode()) > 500: raise ValueError('Text must contain at most 500 ASCII bytes')
@@ -381,7 +432,7 @@ class CoreDeviceBackend:
             if isinstance(key, str) and key.lower() in BUTTONS:
                 await connection.button(*BUTTONS[key.lower()])
                 return 'Pressed the %s hardware button' % key.lower()
-            await connection.press(usages(chord(key)))
+            await connection.press(held(*chord(key)))
             return None
         if operation == 'scroll':
             amount = args.get('dy', 0)
@@ -403,13 +454,11 @@ class CoreDeviceBackend:
 
     def request(self, operation, **args):
         if self.closed: raise ValueError('Device removed or control closed')
-        if operation in ('capture_tap', 'capture_pointer'):
-            return dict(ok=False, message='CoreDevice control does not use Safari sharing')
         if operation == 'stop_control': return self.stop_capture()
         if operation == 'get_device_status':
             connection = self.connection
             return dict(ok=True, message=self.label, status=dict(
-                transport='coredevice', udid=self.udid, connected=connection is not None,
+                connection=getattr(connection, 'transport', None), udid=self.udid, connected=connection is not None,
                 hid_available=bool(connection and connection.hid_available), captureActive=self.is_fresh(),
                 sharing_active=self.is_fresh(), error=self.error))
         try:
@@ -426,8 +475,7 @@ class CoreDeviceBackend:
                                      ageMilliseconds=int((time.monotonic() - frame_at) * 1000), mimeType='image/jpeg',
                                      width=width, height=height, base64=base64.b64encode(image).decode()))
             if operation == 'pointer_tap':
-                result.update(target=list(self.point), click_sent=True, landing='absolute', verified=True,
-                              observation_method='coredevice-absolute')
+                result.update(target=list(self.point))
             return result
         except (ValueError, OSError) as error:
             return dict(ok=False, message=str(error))
@@ -450,7 +498,6 @@ class CoreDeviceBackend:
         except Exception: pass  # Teardown is best effort; the loop stops regardless.
         self.loop.call_soon_threadsafe(self.loop.stop)
         self.thread.join(5)
-        _tunnel.release()
 
     async def shutdown(self):
         # Cancel inside the loop and await it so the tunnel unwinds before the loop stops.

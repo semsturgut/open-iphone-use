@@ -1,28 +1,5 @@
-"""HOGP descriptor and validated US keyboard / relative pointer report encoding."""
+"""US-layout key strokes and chords as (modifier bits, HID keyboard usage)."""
 import math
-
-HID_UUID = '00001812-0000-1000-8000-00805f9b34fb'
-REPORT_MAP = bytes.fromhex('''
-05 01 09 06 a1 01 85 01 05 07 19 e0 29 e7 15 00 25 01
-75 01 95 08 81 02 95 01 75 08 81 01 95 06 75 08 15 00
-25 65 05 07 19 00 29 65 81 00 c0 05 01 09 02 a1 01
-85 02 09 01 a1 00 05 09 19 01 29 03 15 00 25 01 95 03
-75 01 81 02 95 01 75 05 81 01 05 01 09 30 09 31 09 38
-15 81 25 7f 75 08 95 03 81 06 c0 c0''')
-
-
-def uuid(short):
-    return f'0000{short.lower()}-0000-1000-8000-00805f9b34fb'
-
-
-def mouse(dx=0, dy=0, wheel=0, buttons=0):
-    if any(type(v) is not int or not -127 <= v <= 127 for v in (dx, dy, wheel)) or buttons not in range(8):
-        raise ValueError('HID movement must be integer -127…127; buttons must be 0…7')
-    return bytes([buttons, dx & 255, dy & 255, wheel & 255])
-
-
-def keyboard(modifier=0, usage=0):
-    return bytes([modifier, 0, usage, 0, 0, 0, 0, 0])
 
 
 def stroke(character):
@@ -52,16 +29,16 @@ def chord(value):
         if part not in modifiers: raise ValueError(f'Unknown key modifier: {part}')
         modifier |= modifiers[part]
     keys = dict(enter=0x28, tab=0x2b, escape=0x29, backspace=0x2a, delete=0x4c, space=0x2c,
-                up=0x52, down=0x51, left=0x50, right=0x4f, home=0x4a, end=0x4d, pageup=0x4b, pagedown=0x4e)
-    alias = {'return': 'enter', 'ret': 'enter', 'esc': 'escape', 'escape': 'escape', 'del': 'delete', 'bksp': 'backspace',
+                up=0x52, down=0x51, left=0x50, right=0x4f, end=0x4d, pageup=0x4b, pagedown=0x4e)
+    alias = {'return': 'enter', 'ret': 'enter', 'esc': 'escape', 'del': 'delete', 'bksp': 'backspace',
              'spacebar': 'space', 'pgup': 'pageup', 'pgdn': 'pagedown', 'arrowup': 'up', 'arrowdown': 'down',
              'arrowleft': 'left', 'arrowright': 'right'}
     key = alias.get(parts[-1], parts[-1])
-    if key in keys: return keyboard(modifier, keys[key])
+    if key in keys: return modifier, keys[key]
     if len(key) == 1:
         extra, usage = stroke(key)
-        return keyboard(modifier | extra, usage)
-    raise ValueError(f'Unknown key: {key}. Accepted: return/enter, tab, esc/escape, del/delete, bksp/backspace, space, pgup/pageup, pgdn/pagedown, up/down/left/right, arrowup/arrowdown/arrowleft/arrowright, cmd/ctrl/shift/alt/cmd+<key>, or a single character')
+        return modifier | extra, usage
+    raise ValueError(f'Unknown key: {key}. Accepted: return/enter, tab, esc/escape, del/delete, bksp/backspace, space, pgup/pageup, pgdn/pagedown, up/down/left/right, cmd/ctrl/shift/alt+<key>, a single character, or a button: home, lock, volume_up, volume_down, mute, siri')
 
 
 def fraction(value):

@@ -9,9 +9,9 @@ import unittest
 from PIL import Image
 
 from oiu import coredevice
-from oiu.coredevice import CoreDeviceBackend, UNIT, held, jpeg, usages
+from oiu.coredevice import CoreDeviceBackend, UNIT, held, jpeg
 from oiu.core import Device, Registry
-from oiu.hid import chord
+from oiu.keys import chord
 
 _image = io.BytesIO()
 Image.new('RGB', (9, 19), 'white').save(_image, format='JPEG')
@@ -62,7 +62,7 @@ def opener(connection):
 class CoreDeviceTests(unittest.TestCase):
     def setUp(self):
         self.connection = FakeConnection()
-        self.device = Device('phone', 'Phone', 'token', udid='00008110-TEST')
+        self.device = Device('phone', 'Phone', '00008110-TEST')
         self.device.backend = CoreDeviceBackend(self.device, self.device.udid, opener(self.connection))
         self.addCleanup(self.device.backend.close)
         deadline = time.monotonic() + 3
@@ -75,17 +75,16 @@ class CoreDeviceTests(unittest.TestCase):
             arguments['expectedFrameID'] = self.device.frame_id
         return self.device.action(operation, arguments)
 
-    def test_frames_flow_without_sharing_or_bluetooth(self):
+    def test_frames_flow_and_status_names_the_connection(self):
         summary = self.device.summary()
         self.assertTrue(summary['capture_active'])
-        self.assertEqual(summary['transport'], 'coredevice')
-        self.assertEqual(summary['control_status'], 'CoreDevice connected')
+        self.assertEqual(summary['control_status'], 'Connected over USB')
 
     def test_tap_is_absolute_and_returns_a_later_frame(self):
         result = self.act('pointer_tap', x=.25, y=1)
         self.assertTrue(result['ok'], result)
         self.assertEqual(self.connection.calls, [('tap', round(.25 * UNIT), UNIT)])
-        self.assertEqual(result['landing'], 'absolute')
+        self.assertEqual(result['target'], [.25, 1.0])
         self.assertGreater(self.device.backend.requested, result['inputEndedAt'])
         self.assertEqual(result['frame']['frameID'], self.device.frame_id)
         self.assertTrue(self.act('pointer_tap', x=.5, y=.5)['ok'])  # The returned frame is valid next.
@@ -95,10 +94,8 @@ class CoreDeviceTests(unittest.TestCase):
         self.act('click')
         self.assertEqual(self.connection.calls, [('tap', round(.1 * UNIT), round(.2 * UNIT))])
 
-    def test_relative_motion_is_refused(self):
-        result = self.act('move_pointer', dx=3, dy=0)
-        self.assertFalse(result['ok'])
-        self.assertIn('absolute', result['message'])
+    def test_relative_motion_is_not_an_action(self):
+        with self.assertRaisesRegex(ValueError, 'Unknown action'): self.act('move_pointer', dx=3, dy=0)
         self.assertEqual(self.connection.calls, [])
 
     def test_text_is_validated_before_any_key(self):
@@ -108,7 +105,7 @@ class CoreDeviceTests(unittest.TestCase):
         self.assertEqual(self.connection.calls, [('press', (0x04,)), ('press', (0xE1, 0x05))])
 
     def test_key_chords_map_modifiers_to_usages(self):
-        self.assertEqual(usages(chord('cmd+space')), (0xE3, 0x2C))
+        self.assertEqual(held(*chord('cmd+space')), (0xE3, 0x2C))
         self.assertEqual(held(0, 0x28), (0x28,))
         self.act('send_key', key='cmd+h')
         self.assertEqual(self.connection.calls, [('press', (0xE3, 0x0B))])
@@ -130,9 +127,13 @@ class CoreDeviceTests(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertIn('UI Automation', result['message'])
 
-    def test_one_coredevice_phone_per_server(self):
-        with self.assertRaises(ValueError):
-            CoreDeviceBackend(Device('two', 'Two', 'token', udid='other'), 'other', opener(FakeConnection()))
+    def test_several_phones_can_share_a_server(self):
+        other = Device('two', 'Two', 'other')
+        other.backend = CoreDeviceBackend(other, 'other', opener(FakeConnection()))
+        self.addCleanup(other.backend.close)
+        deadline = time.monotonic() + 3
+        while not other.summary()['capture_active'] and time.monotonic() < deadline: time.sleep(.01)
+        self.assertTrue(other.summary()['capture_active'])
 
     def test_stop_releases_the_touch(self):
         self.act('pointer_tap', x=.5, y=.5)
@@ -157,31 +158,14 @@ class FailingOpenerTests(unittest.TestCase):
             raise OSError('Developer Mode is off')
             yield
 
-        device = Device('phone', 'Phone', 'token', udid='u1')
+        device = Device('phone', 'Phone', 'u1')
         backend = CoreDeviceBackend(device, 'u1', failing)
         backend.RETRY_SECONDS = 0
         self.addCleanup(backend.close)
         self.assertTrue(attempts.wait(2))
         time.sleep(.05)
-        self.assertEqual(backend.label, 'CoreDevice: Developer Mode is off')
+        self.assertEqual(backend.label, 'Not connected: Developer Mode is off')
         self.assertFalse(backend.request('pointer_tap', x=.5, y=.5)['ok'])
-
-
-class RegistryTests(unittest.TestCase):
-    def test_coredevice_phones_persist_by_udid(self):
-        with tempfile.TemporaryDirectory() as directory:
-            registry = Registry(directory)
-            device = registry.create_coredevice('00008110-000A2D842EA1801E')
-            self.assertIs(registry.create_coredevice('00008110-000A2D842EA1801E'), device)
-            with self.assertRaises(ValueError): registry.create_coredevice('../bad')
-            item, = registry.list(include_links=True)
-            self.assertEqual((item['transport'], item['udid']), ('coredevice', device.udid))
-            self.assertEqual(Registry(directory).devices[device.id].udid, device.udid)
-            self.assertTrue(registry.global_status()['bluetooth_connected'])
-
-
-if __name__ == '__main__':
-    unittest.main()
 
 
 class LiveStreamTests(unittest.TestCase):
@@ -191,7 +175,7 @@ class LiveStreamTests(unittest.TestCase):
         from oiu.http import Server
         with tempfile.TemporaryDirectory() as directory:
             registry = Registry(directory)
-            device = registry.create('Phone', udid='u1')
+            device = registry.create('u1', 'Phone')
             device.upload(JPEG)
             server = Server(('127.0.0.1', 0), registry, watchdog=False)
             threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -202,3 +186,7 @@ class LiveStreamTests(unittest.TestCase):
                     self.assertEqual(head, b'--frame\r\nContent-Type: image/jpeg\r\n')
             finally:
                 server.shutdown(); server.server_close()
+
+
+if __name__ == '__main__':
+    unittest.main()

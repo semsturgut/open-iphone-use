@@ -1,8 +1,11 @@
-# USB control (CoreDevice)
+# How it works (CoreDevice)
 
-A USB phone can be controlled without Bluetooth HID, AssistiveTouch or Safari sharing. The
-server opens Xcode's CoreDevice services over a rootless, in-process RSD tunnel
-([pymobiledevice3](https://github.com/doronz88/pymobiledevice3)'s userspace tunnel):
+The server opens Xcode's CoreDevice services on the phone through an RSD tunnel
+([pymobiledevice3](https://github.com/doronz88/pymobiledevice3)):
+
+- **Connection:** over USB, pymobiledevice3's in-process userspace tunnel (no root). Over Wi-Fi,
+  the tunnel macOS's `remoted` already keeps to a wirelessly paired phone. `remoted` can take that
+  connection back briefly; the backend then reconnects by itself, as it does after unplugging.
 
 - **Screen:** the HEVC stream Xcode mirrors, decoded with VideoToolbox through
   pymobiledevice3's VNC pipeline (keyframe recovery and the RTCP keepalive included). A static
@@ -18,30 +21,31 @@ server opens Xcode's CoreDevice services over a rootless, in-process RSD tunnel
 ## Requirements
 
 - macOS host. The installer includes pymobiledevice3.
-- iPhone on iOS 27 or later, connected by USB, trusted by this Mac, with **Developer Mode** on.
+- iPhone on iOS 27 or later, trusted by this Mac, with **Developer Mode** on. Connected by USB,
+  or over Wi-Fi once Xcode has paired it.
 - For the stream and input: Xcode 27 or later, opened once with the phone connected so it
   mounts its Developer Disk Image. If the phone shows **Settings › Developer › UI Automation**,
   enable it.
-- One CoreDevice phone per server process: the userspace network stack is process-global.
+- One USB phone per server process: the userspace network stack is process-global. Phones on
+  Wi-Fi use remoted's tunnels and can be added alongside it.
 - The stream does not start while a foreground app uses the camera or microphone.
 
 ## Use
 
 ```sh
-open-iphone-use coredevices                # USB phones with name, iOS version and UDID
+open-iphone-use candidates                 # connected phones: name, iOS, USB or Wi-Fi, UDID
 open-iphone-use new                        # add the connected phone (or --udid UDID)
 ```
 
 The Web UI streams each phone live as MJPEG at up to 30 fps
 (`/api/devices/DEVICE_ID/stream`, loopback only); click the screen to tap.
 
-MCP clients call `list_coredevice_candidates`, then `create_device` with `udid`. Every other
-tool is unchanged:
+MCP clients call `list_candidates`, then `create_device` with `udid`. Then:
 
 - `ensure_session` checks that input is available instead of calibrating; `return_app`
   opens an app through Spotlight.
 - `pointer_tap` touches the exact fraction given. `pointer_move` only sets the target that
-  `click` touches. `move_pointer` (relative motion) is refused.
+  `click` touches.
 - `send_key` takes the usual keys and chords. `home`, `lock`, `volume_up`, `volume_down`, `mute`
   and `siri` press hardware buttons; Cmd+H does not go home on an iPhone.
 - `stop_control` cancels the running action and releases the finger and keys.
@@ -71,6 +75,13 @@ With Xcode 27.2 installed and opened:
   - `pointer_tap(0.5, 0.818)` hit the Home Screen Search button and opened Spotlight.
 - Closing the backend took about 0.1 s.
 
+iPhone 13, iOS 27.0, over Wi-Fi (unplugged, same network as the Mac, phone locked):
+
+- The tunnel through `remoted` connected in 0.7 s. The first decoded frame took 13.6 s and the
+  stream ran at about 12 fps.
+- Checked on the returned frames: `home` woke the Lock Screen, a right swipe opened the Today
+  view, and `home` returned to the Lock Screen.
+
 iPhone SE 2nd generation (iPhone12,8), iOS 27.0.1, through the Web UI:
 
 - The phone was listed with its name and iOS version, and **Add phone** brought up its live
@@ -81,5 +92,9 @@ iPhone SE 2nd generation (iPhone12,8), iOS 27.0.1, through the Web UI:
   - **Swipe down** opened search.
   - **Type** entered `Hello SE 27`.
 
-Not checked: other devices or iOS versions, long sessions, Wi-Fi, pinch and multi-touch,
+Both phones at once, iPhone SE over USB and iPhone 13 over Wi-Fi: both streamed live in the Web
+UI at the same time. After a server restart, the saved phone reconnected and streamed again
+without any action.
+
+Not checked: other devices or iOS versions, long sessions, unlocked use over Wi-Fi, multi-touch,
 apps that use the camera, and the screenshot fallback's CoreDevice capture path.

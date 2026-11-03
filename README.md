@@ -1,19 +1,19 @@
 # Open iPhone Use
 
-Let an AI agent use your own iPhone. Connect the phone to your Mac with a cable, and
+Let an AI agent use your own iPhone. Connect the phone to your Mac by cable or Wi-Fi, and
 Open iPhone Use streams its screen live and taps, swipes, types and presses buttons on it
 through Xcode's CoreDevice services. Your agent connects over MCP. The server contains no
 model or AI API key.
 
-- **Live screen:** the same HEVC stream Xcode mirrors, about 45 frames per second.
+- **Live screen:** the same HEVC stream Xcode mirrors, about 45 frames per second over USB.
 - **Exact input:** touches land on the exact pixel, so there is no pointer to calibrate. Text,
   key chords and the Home, Lock, volume and Siri buttons work too.
 - **Nothing on the phone:** no app, no Bluetooth pairing, no certificate, no Safari tab.
 
-> **Using Xcode 26 or iOS 26?** The previous release works without Xcode 27, using Bluetooth
-> HID and Safari screen sharing. Install it with
+> **Using Xcode 26 or iOS 26?** Install
+> [v0.0.3](https://github.com/semsturgut/open-iphone-use/releases/tag/v0.0.3), the last release
+> that works without Xcode 27 (Bluetooth HID and Safari screen sharing):
 > `curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --version v0.0.3`
-> and follow the [legacy Bluetooth setup](docs/bluetooth-legacy.md).
 
 ## Requirements
 
@@ -26,61 +26,61 @@ model or AI API key.
 
 ## Quick start
 
-**Install**
-
 ```sh
 curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash
 ```
-
-**Start**
 
 ```sh
 open-iphone-use serve
 ```
 
-It starts in the background and prints a `Web UI:` link (`http://127.0.0.1:27893`).
-
-**Add your iPhone**
-
 ```sh
 open-iphone-use new
 ```
 
-Or select **Add phone** in the Web UI. With several phones connected, `open-iphone-use
-coredevices` lists them and `open-iphone-use new --udid UDID` picks one.
+`serve` starts in the background and prints a `Web UI:` link (`http://127.0.0.1:27893`).
+`new` adds the connected phone; with several phones it asks which one, or takes
+`--udid UDID` (`open-iphone-use candidates` lists them). You can also select **Add phone** in
+the Web UI.
 
-**Watch it live.** The Web UI shows each phone's screen live. Click the screen to tap, and use
-the Home, swipe and typing controls under it. The Web UI is loopback-only and needs no token,
-so any local process can operate it: do not expose it through a proxy.
-
-**Stop or uninstall**
+**Watch it live.** The Web UI shows each phone's screen live; click the screen to tap. It is
+loopback-only and needs no token, so any local process can operate it: do not expose it
+through a proxy.
 
 ```sh
-open-iphone-use stop
+open-iphone-use devices                    # list added phones
+open-iphone-use status --device DEVICE_ID  # connection details
+open-iphone-use remove DEVICE_ID           # remove a phone and stop its control
+open-iphone-use stop                       # stop the server
 ```
+
+To uninstall:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --uninstall
 ```
 
-`serve --foreground` runs in the terminal for debugging. The server is not a login or reboot
-service. See [Advanced installation](docs/installation.md#advanced-installation) for options
-and development setup.
+See [installation](docs/installation.md) for options and development setup.
 
-```sh
-open-iphone-use devices                    # list registered phones
-open-iphone-use status --device DEVICE_ID  # inspect a phone
-open-iphone-use remove DEVICE_ID           # remove a phone and stop its control
-```
+## Wi-Fi
+
+Once Xcode has paired the phone over a cable, macOS can also reach it wirelessly. When the
+cable is unplugged and both are on the same network, the phone shows up as **Wi-Fi** in
+`open-iphone-use candidates` and the Web UI, and can be added and controlled without the
+cable. If it does not appear, open Xcode's Devices window once with the phone nearby. The phone and Mac must be on the same network. Over Wi-Fi the screen arrives at a lower
+frame rate (about 12 fps in a first test) and takes longer to start.
+
+To reconnect, plug the cable back in or bring the phone onto the same Wi-Fi: the server keeps
+retrying and the phone's screen comes back in the Web UI by itself. Added phones are remembered
+across server restarts.
 
 ## MCP
 
 Setup registers the MCP server and agent skill for detected clients (Codex, Claude Code,
 Cursor, OpenCode, Command Code). Use an image-capable agent. The tools:
 
-- **Setup and status:** `list_coredevice_candidates`, `create_device` (with `udid`),
-  `remove_device`, `list_devices`, `get_device_status`, `get_latest_screenshot`,
-  `stop_control`.
+- **Setup and status:** `list_candidates`, `create_device` (with `udid`), `remove_device`,
+  `list_devices`, `get_device_status`, `get_latest_screenshot`, `stop_control`.
 - **Input:** `ensure_session`, `pointer_tap`, `type_text`, `send_key`, `swipe`, `scroll`,
   `advance_feed`. `send_key` also takes `home`, `lock`, `volume_up`, `volume_down`, `mute` and
   `siri`.
@@ -97,11 +97,12 @@ How the tools work:
 
 ## Limits
 
-- One USB phone per server process.
-- Tested on an iPhone 13 (iOS 27.0) and an iPhone SE (iOS 27.0.1). Wi-Fi, multi-touch and long sessions are not tested yet.
+- One USB phone per server; more phones can join over Wi-Fi.
+- Tested on an iPhone 13 (iOS 27.0, USB and Wi-Fi) and an iPhone SE (iOS 27.0.1, USB), also
+  both at once.
+  Multi-touch and long sessions are not tested yet.
 - The screen stream will not start while an app is using the camera or microphone.
 - macOS only: the stream is decoded with VideoToolbox.
 
-See [USB control (CoreDevice)](docs/coredevice.md) for how it works and the validation record.
-Read the [changelog](CHANGELOG.md), [documentation](docs/) and
-[contributing guide](CONTRIBUTING.md).
+See [how it works](docs/coredevice.md) for details and the validation record. Read the
+[changelog](CHANGELOG.md), [roadmap](ROADMAP.md) and [contributing guide](CONTRIBUTING.md).

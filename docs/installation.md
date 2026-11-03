@@ -1,104 +1,52 @@
-# CLI installation and removal
+# Installation and removal
 
-The macOS app and DMG are deprecated and removed; use the CLI. Windows and Linux backends
-have not been tested on real hardware; reports and pull requests are welcome.
+Open iPhone Use runs on macOS. It needs Xcode 27 or later; the iPhone needs iOS 27 or later
+with Developer Mode on. For Xcode 26 / iOS 26, install the
+[v0.0.3 release](https://github.com/semsturgut/open-iphone-use/releases/tag/v0.0.3), which uses
+Bluetooth and Safari screen sharing.
 
 ## Quick start
 
-**Install**
-
 ```sh
 curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash
-```
-
-**Start**
-
-```sh
 open-iphone-use serve
+open-iphone-use new
 ```
 
-It starts in the background and returns, printing a `Web UI:` link (a local `http://127.0.0.1:…` address). Open that link in your browser to use the web UI. Use `open-iphone-use stop` to stop the server.
-
-**Uninstall**
+To uninstall:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/install.sh | bash -s -- --uninstall
 ```
 
-Windows: see [Advanced installation](#advanced-installation).
+## Options
 
-## Advanced installation
+The installer uses the latest published release, or `main` if none exists. `--version TAG`
+selects a release tag or branch, `--dry-run` prints the plan without writing files, and
+`--no-agents` skips MCP registration. `OIU_REPO` and `OIU_ARCHIVE_URL` select a repository or a
+full archive URL (`file://` works for local archives).
 
-### macOS / Linux
-
-The prebuilt helper requires a release with assets. The default is the latest published
-release, or `main` if none exists. Use `--version v0.0.3` to select a release tag or
-branch. `--dry-run` prints the plan without writing files;
-`--no-agents` skips registration. `OIU_REPO`, `OIU_ARCHIVE_URL` and `OIU_HELPER_URL`
-select a repository or full archive URLs; helper checksums are fetched from the helper URL
-with `.sha256` appended. `--verify-downloads` downloads and verifies into a temporary
-directory without installing. Use `file://` URLs for local archives.
-
-For development, clone the repository and run `sh setup.sh` from the checkout. The checkout
-setup also accepts `OIU_SOURCE_DIR` and `OIU_REF` for an alternate source.
+For development, clone the repository and run `sh setup.sh` from the checkout.
 
 The managed runtime is `~/.local/share/open-iphone-use/runtime`, the launcher is
-`~/.local/bin/open-iphone-use`, and device credentials/CA/calibration stay separately in
-`~/.open-iphone-use`. Add `~/.local/bin` to PATH if your shell does not already include it.
-No shell profile is silently rewritten. Existing legacy app CLI symlinks are migrated and
-restored on uninstall; unrelated occupied CLI paths are refused.
+`~/.local/bin/open-iphone-use`, and phone state stays separately in `~/.open-iphone-use`. Add
+`~/.local/bin` to PATH if your shell does not already include it; no shell profile is rewritten.
+Unrelated occupied CLI paths are refused.
 
-Setup uses Python 3.11+ if present. Otherwise it bootstraps Astral's official `uv` installer
-in the managed runtime and installs a private CPython 3.12, without changing the system
-Python. Dependencies come from PyPI. On macOS the installer checks the prebuilt helper checksum and
-architecture. The helper is ad-hoc signed, not notarized. If no usable prebuilt exists, setup
-builds it with Swift 6 and Xcode Command Line Tools; installing these and accepting any license
-remain owner actions. The helper serves only the legacy Bluetooth mode (`serve --bluetooth`);
-in that mode macOS may ask for Bluetooth permission for the terminal or app that launches the
-server. On
-Linux it installs missing BlueZ/D-Bus using apt, dnf or pacman with sudo, and starts the
-Bluetooth service where systemd is available. OS package-manager permissions may prompt.
-Unsupported distributions receive an explicit dependency instruction. Run the server as
-your normal user, not root.
-
-Options and overrides:
+Setup uses Python 3.11+ if present. Otherwise it installs a private CPython 3.12 with Astral's
+`uv` inside the managed runtime, without changing the system Python. Dependencies, including
+pymobiledevice3, come from PyPI. Run the server as your normal user, not root.
 
 ```sh
 sh setup.sh --no-agents                  # runtime/CLI only
-sh setup.sh --uninstall                  # keep phone state and certificates
+sh setup.sh --uninstall                  # keeps phone state
 OIU_INSTALL_ROOT=/private/path/runtime OIU_BIN_DIR=/private/path/bin sh setup.sh
 OIU_PYTHON=/path/to/python3 sh setup.sh
 ```
 
 `OIU_INSTALL_ROOT` and `OIU_BIN_DIR` must be absolute. Managed directories are marked;
-unmanaged directories and unrelated CLI files are preserved. Do not store user files
-inside the managed runtime. Stop an active server before upgrading. Re-running setup
-uses the same installation and client entries. `OIU_SWIFT_DISABLE_SANDBOX=1` is an optional
-SwiftPM-only workaround for environments whose outer sandbox blocks nested sandboxing;
-it does not change OS Bluetooth permissions or the outer sandbox.
-
-### Windows
-
-```powershell
-irm https://raw.githubusercontent.com/semsturgut/open-iphone-use/main/setup.ps1 | iex
-open-iphone-use serve
-# For uninstall, download setup.ps1 and run:
-.\setup.ps1 -Uninstall
-```
-
-If CPython 3.12 is missing, setup uses user-scoped `winget` installation, or tells the owner
-to install it when winget is unavailable. Python native WinRT wheels supply the GATT
-implementation; no custom driver, DMG or C# build is required. The managed runtime and
-native console launcher live under `%LOCALAPPDATA%\OpenIPhoneUse`. Setup adds its `bin`
-to the user PATH and tracks ownership so uninstall removes only that entry. A copied pip
-console launcher preserves Unicode paths and avoids changing PowerShell execution policy.
-If your execution policy disallows the downloaded setup script, review it and use your
-organization's permitted invocation; setup never bypasses policy.
-
-`-NoAgents`, `-InstallRoot`, `-SourceDir` and `-Ref` customize installation. Bluetooth
-privacy/driver/policy checks happen when the server starts; enable Windows Firewall access
-on the private network if prompted. Device state is owner-private using an NTFS ACL with
-the current user and SYSTEM; FAT/exotic filesystem/ACL failures are reported.
+unmanaged directories and unrelated CLI files are preserved. Stop a running server before
+upgrading.
 
 ## Agent registration and Skill
 
@@ -121,41 +69,28 @@ symlinked configs are refused. Backups may contain private settings: never publi
 The only installed canonical skill is `~/.agents/skills/open-iphone-use/SKILL.md` (file 644,
 directory 755 on POSIX). Detected Claude/Command Code clients get directory aliases at
 `~/.claude/skills/open-iphone-use` and `~/.commandcode/skills/open-iphone-use`, targeting
-`../../.agents/skills/open-iphone-use`. Windows uses a directory symlink, junction, or copy
-fallback if privileges/filesystem prevent linking. Rerunning registration refreshes the fallback.
-The runtime's `agent-skill.md` is a source template, not another discovered skill.
+`../../.agents/skills/open-iphone-use`. The runtime's `agent-skill.md` is a source template, not another discovered skill.
 Registration replaces stale product copies/old app aliases and removes product
 `*.open-iphone-use-backup` files in known client/skill locations; it is idempotent.
 
 Uninstall restores/removes only unchanged MCP entries, never resurrecting the removed app.
 Modified MCP entries are retained with a diagnostic. Managed skill aliases are removed and
-an unchanged canonical skill is removed; OS pairing and the separate phone-state directory/CA
-remain intact. Registration manifests and config backups remain for owner recovery.
-Uninstalling Linux system packages, revoking OS pairings or deleting the CA is deliberately
-an explicit owner/system action rather than part of removing this user's CLI.
+an unchanged canonical skill is removed; the separate phone-state directory remains intact.
+Registration manifests and config backups remain for owner recovery.
 
 Restart detected clients after setup. If a client was installed later, re-run setup or run:
 
 ```sh
 open-iphone-use register-agents
 # To install a specific updated source:
-open-iphone-use register-agents --skill /path/to/macos/Resources/open-iphone-use-skill/SKILL.md
+open-iphone-use register-agents --skill /path/to/skill/SKILL.md
 ```
 
 Reference schemas: [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
 [Cursor MCP](https://cursor.com/docs/mcp), [Claude Code MCP](https://code.claude.com/docs/en/mcp).
 
-
-After installation, `open-iphone-use serve` detaches by default and prints a short status,
-the loopback Web UI and private log path. Open that Web UI directly, without a token.
-Use `serve --foreground` to debug and `stop` to shut down. Connect the iPhone by USB and
-run `new` (or select **Add phone** in the UI); its screen appears live in the Web UI. For the
-legacy Bluetooth mode see [Legacy Bluetooth setup](bluetooth-legacy.md). `devices`, `status --device`, `link` and `remove` work without
-a host browser. Distribution builds use these setup scripts and the CLI only.
-
 ## Release assets
 
-Create the GitHub release as a draft first, then run the Release assets workflow manually
-with its tag to build and upload assets before publishing. Publishing also triggers the
-workflow. Assets include the universal ad-hoc-signed helper and a source archive, each
-with a SHA-256 file. Release creation and publication are separate owner actions.
+Publishing a GitHub release runs the Release assets workflow, which uploads a source archive
+and its SHA-256 file; it can also be run manually for an existing tag. Release creation and
+publication are owner actions.
