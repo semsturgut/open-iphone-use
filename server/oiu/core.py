@@ -203,7 +203,7 @@ class Registry:
 
     def bluetooth_peers(self):
         if self.radio is None:
-            raise ValueError('Bluetooth HID is required. Pair your iPhone in AssistiveTouch > Devices > Bluetooth Devices first.')
+            raise ValueError('Legacy Bluetooth HID is off. Connect phones by USB, or restart with serve --bluetooth for the Xcode 26 setup.')
         result = []
         for peer in self.radio.peers():
             if set(peer.get('reports', [])) != {1, 2}: continue
@@ -235,13 +235,13 @@ class Registry:
             if existing: return existing
             return self.create(peer['name'], bt_id, peer['name_source'])
 
-    def create_coredevice(self, udid):
+    def create_coredevice(self, udid, name=None):
         if not isinstance(udid, str) or not 1 <= len(udid) <= 64 or not all(c.isalnum() or c == '-' for c in udid):
             raise ValueError('Select a USB-connected phone using its UDID')
         with self.lock:
             existing = next((d for d in self.devices.values() if d.udid == udid), None)
             if existing: return existing
-            return self.create('iPhone ' + udid[-6:], udid=udid)
+            return self.create(specific(name) or 'iPhone ' + udid[-6:], udid=udid, name_source='device' if specific(name) else 'fallback')
 
     def capture_device(self, token):
         with self.lock:

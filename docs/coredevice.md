@@ -1,4 +1,4 @@
-# CoreDevice control (experimental)
+# USB control (CoreDevice)
 
 A USB phone can be controlled without Bluetooth HID, AssistiveTouch or Safari sharing. The
 server opens Xcode's CoreDevice services over a rootless, in-process RSD tunnel
@@ -17,7 +17,7 @@ server opens Xcode's CoreDevice services over a rootless, in-process RSD tunnel
 
 ## Requirements
 
-- macOS host with the optional dependency: `pip install "open-iphone-use-server[coredevice]"`.
+- macOS host. The installer includes pymobiledevice3.
 - iPhone on iOS 27 or later, connected by USB, trusted by this Mac, with **Developer Mode** on.
 - For the stream and input: Xcode 27 or later, opened once with the phone connected so it
   mounts its Developer Disk Image. If the phone shows **Settings › Developer › UI Automation**,
@@ -28,9 +28,12 @@ server opens Xcode's CoreDevice services over a rootless, in-process RSD tunnel
 ## Use
 
 ```sh
-open-iphone-use coredevices                # USB phones by UDID
-open-iphone-use new --udid <UDID>          # add one; no link or QR
+open-iphone-use coredevices                # USB phones with name, iOS version and UDID
+open-iphone-use new                        # add the connected phone (or --udid UDID)
 ```
+
+The Web UI streams each phone live as MJPEG at up to 30 fps
+(`/api/devices/DEVICE_ID/stream`, loopback only); click the screen to tap.
 
 MCP clients call `list_coredevice_candidates`, then `create_device` with `udid`. Every other
 tool is unchanged:

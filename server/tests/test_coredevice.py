@@ -182,3 +182,23 @@ class RegistryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class LiveStreamTests(unittest.TestCase):
+    def test_web_ui_streams_frames_as_mjpeg(self):
+        import threading
+        from urllib.request import urlopen
+        from oiu.http import Server
+        with tempfile.TemporaryDirectory() as directory:
+            registry = Registry(directory)
+            device = registry.create('Phone', udid='u1')
+            device.upload(JPEG)
+            server = Server(('127.0.0.1', 0), registry, watchdog=False)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                with urlopen(f'http://127.0.0.1:{server.server_port}/api/devices/{device.id}/stream', timeout=5) as response:
+                    self.assertTrue(response.headers['Content-Type'].startswith('multipart/x-mixed-replace'))
+                    head = response.read(len(b'--frame\r\nContent-Type: image/jpeg\r\n'))
+                    self.assertEqual(head, b'--frame\r\nContent-Type: image/jpeg\r\n')
+            finally:
+                server.shutdown(); server.server_close()

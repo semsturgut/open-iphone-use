@@ -55,17 +55,28 @@ def show_link(args, device):
     print('Scan on this Bluetooth-paired iPhone. The server must remain running; Bluetooth HID is required.')
 
 
+def choose(candidates, key, describe, flag):
+    if len(candidates)==1: return candidates[0]
+    for i,p in enumerate(candidates,1): print(f"{i}. {describe(p)} [{p[key]}]",file=sys.stderr)
+    if not sys.stdin.isatty(): raise ValueError(f'Several phones connected; choose explicitly with new {flag} <id>')
+    try: choice=int(input('Choose phone number: '))
+    except (ValueError,EOFError): raise ValueError('Invalid selection') from None
+    if not 1<=choice<=len(candidates): raise ValueError('Invalid selection')
+    return candidates[choice-1]
+
+
 def print_running(url,status,log):
-    on=status.get('bluetooth_on',False)
-    state=status.get('bluetooth_state','unknown')
-    label='initializing' if state in ('starting','waitingForBluetooth','publishing','resetting') else ('on' if on else 'off')
-    dot=('● ' if sys.stdout.isatty() else '')+label
-    from .qr import enable_ansi
-    if sys.stdout.isatty() and enable_ansi(): dot=('\x1b[32m' if on else '\x1b[31m')+dot+'\x1b[0m'
     print('Open iPhone Use is running')
     print('Web UI:  '+url)
-    print(f"Bluetooth: {dot}  ({status.get('bluetooth_state','unknown')})")
-    print('Add a phone: open-iphone-use new')
+    state=status.get('bluetooth_state','unknown')
+    if state!='capture-only':
+        on=status.get('bluetooth_on',False)
+        label='initializing' if state in ('starting','waitingForBluetooth','publishing','resetting') else ('on' if on else 'off')
+        dot=('● ' if sys.stdout.isatty() else '')+label
+        from .qr import enable_ansi
+        if sys.stdout.isatty() and enable_ansi(): dot=('\x1b[32m' if on else '\x1b[31m')+dot+'\x1b[0m'
+        print(f"Bluetooth (legacy): {dot}  ({state})")
+    print('Add a phone: connect it by USB, then open-iphone-use new')
     print('Stop:      open-iphone-use stop')
     print('Log:       '+str(log),flush=True)
 
@@ -88,7 +99,7 @@ def serve(args,parser):
         cert,key=args.cert,args.key
         if not args.local_http and not cert: cert,key,ca,public=certificates(args.state,host)
         context=None if args.local_http else tls_context(cert,key)
-        if not args.capture_only:
+        if args.bluetooth and not args.capture_only:
             radio=create_radio(args.state,args.helper)
             registry.radio=radio
             pairing=Pairing(radio)
@@ -102,7 +113,7 @@ def serve(args,parser):
             bluetooth=lambda device: Control(pairing,registry.directory/device.id,peer=device.bt_id)
         else: bluetooth=None
         def backend(device):
-            if device.udid:
+            if device.udid and not args.capture_only:
                 from .coredevice import CoreDeviceBackend
                 return CoreDeviceBackend(device,device.udid)
             return bluetooth(device) if bluetooth else CaptureOnlyBackend()
@@ -165,18 +176,19 @@ def main():
     start.add_argument('--cert'); start.add_argument('--key')
     start.add_argument('--helper',help='Override native macOS helper path')
     start.add_argument('--local-http',action='store_true',help='Localhost HTTP development mode')
-    start.add_argument('--capture-only',action='store_true',help='Explicitly disable HID for diagnostics')
+    start.add_argument('--capture-only',action='store_true',help='Explicitly disable control for diagnostics')
+    start.add_argument('--bluetooth',action='store_true',help='Legacy: Bluetooth HID with Safari screen sharing, for Xcode 26 / iOS 26 setups')
     start.add_argument('--certificate-port',type=int,default=27892)
     start.add_argument('--no-certificate-server',action='store_true')
     start.add_argument('--no-print-secrets',action='store_true',help=argparse.SUPPRESS)
     sub.add_parser('devices'); sub.add_parser('mcp'); sub.add_parser('stop')
-    sub.add_parser('bluetooth',help='List Bluetooth-connected HID phones')
-    sub.add_parser('coredevices',help='List USB phones for CoreDevice control (needs pymobiledevice3)')
+    sub.add_parser('bluetooth',help='Legacy: list Bluetooth-connected HID phones (serve --bluetooth)')
+    sub.add_parser('coredevices',help='List USB-connected phones')
     for name in ('new','add'):
-        add=sub.add_parser(name,help='Select a connected Bluetooth phone and print its private link + QR')
+        add=sub.add_parser(name,help='Add a USB-connected phone (or, with --bt, a legacy Bluetooth phone)')
         choice=add.add_mutually_exclusive_group()
-        choice.add_argument('--bt',help='Exact Bluetooth peer ID (otherwise choose interactively)')
-        choice.add_argument('--udid',help='Add a USB phone controlled over CoreDevice instead of Bluetooth')
+        choice.add_argument('--udid',help='Exact USB phone UDID (otherwise choose interactively)')
+        choice.add_argument('--bt',help='Legacy: exact Bluetooth peer ID; prints its Safari sharing link + QR')
     link=sub.add_parser('link',help='Show an existing phone sharing link + QR')
     link.add_argument('device')
     remove=sub.add_parser('remove',help='Remove a phone and revoke its sharing link')
@@ -207,24 +219,20 @@ def main():
         elif args.command=='devices': print(json.dumps(call(args,'/api/devices'),indent=2))
         elif args.command=='bluetooth': print(json.dumps(call(args,'/api/bluetooth'),indent=2))
         elif args.command=='coredevices': print(json.dumps(call(args,'/api/coredevices'),indent=2))
-        elif args.command in ('new','add') and args.udid:
-            result=call(args,'/api/devices',{'udid':args.udid})
-            print(f"{result['name']} [{result['device_id']}] over CoreDevice: {result['control_status']}")
-            print('No sharing link is needed; frames and touches use the USB CoreDevice tunnel.')
+        elif args.command in ('new','add') and not args.bt:
+            candidates=[p for p in call(args,'/api/coredevices') if p['available']]
+            if args.udid:
+                selected=next((p for p in candidates if p['udid']==args.udid),None)
+                if selected is None: raise ValueError('That phone is not connected by USB or is already added')
+            elif not candidates: raise ValueError('No unadded USB phones. Connect the iPhone by cable and trust this Mac.')
+            else: selected=choose(candidates,'udid',lambda p: 'iPhone','--udid')
+            result=call(args,'/api/devices',{'udid':selected['udid']})
+            print(f"{result['name']} [{result['device_id']}]: {result['control_status']}")
+            print('Watch and control it in the Web UI; agents use it through MCP.')
         elif args.command in ('new','add'):
             candidates=[p for p in call(args,'/api/bluetooth') if p['available']]
-            if not candidates: raise ValueError('No unadded Bluetooth HID phones. Pair/connect in AssistiveTouch first; both keyboard and pointer subscriptions are required.')
-            if args.bt:
-                selected=next((p for p in candidates if p['id']==args.bt),None)
-                if selected is None: raise ValueError('Selected Bluetooth phone is disconnected or already added')
-            elif len(candidates)==1: selected=candidates[0]
-            else:
-                for i,p in enumerate(candidates,1): print(f"{i}. {p['name']} [{p['id']}]",file=sys.stderr)
-                if not sys.stdin.isatty(): raise ValueError('Several phones connected; choose explicitly with new --bt <id>')
-                try: choice=int(input('Choose phone number: '))
-                except (ValueError,EOFError): raise ValueError('Invalid selection') from None
-                if not 1<=choice<=len(candidates): raise ValueError('Invalid selection')
-                selected=candidates[choice-1]
+            selected=next((p for p in candidates if p['id']==args.bt),None)
+            if selected is None: raise ValueError('Selected Bluetooth phone is disconnected or already added')
             result=call(args,'/api/devices',{'bt_id':selected['id']})
             show_link(args,result)
         elif args.command=='link':

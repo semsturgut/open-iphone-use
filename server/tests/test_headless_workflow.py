@@ -52,7 +52,7 @@ class HeadlessWorkflowTests(unittest.TestCase):
                 self.assertNotEqual(duplicate.returncode,0)
                 listed=subprocess.run(base+['devices'],check=True,capture_output=True,text=True)
                 self.assertEqual(json.loads(listed.stdout),[])
-                no_bt=subprocess.run(base+['new'],capture_output=True,text=True)
+                no_bt=subprocess.run(base+['new','--bt','peer'],capture_output=True,text=True)
                 self.assertNotEqual(no_bt.returncode,0)
                 self.assertIn('Bluetooth',no_bt.stderr)
                 stopped=subprocess.run(base+['stop'],check=True,capture_output=True,text=True,timeout=15)

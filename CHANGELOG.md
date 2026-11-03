@@ -1,12 +1,18 @@
 # Changelog
 
+## 0.1.0 — USB control (unreleased)
+
+- Control phones over USB through Xcode's CoreDevice services: the HEVC screen stream Xcode
+  mirrors (about 45 fps), exact touches, a virtual keyboard and hardware buttons, over a
+  rootless tunnel. Needs Xcode 27, iOS 27 and Developer Mode. Older Developer Disk Images
+  fall back to screenshots without input. Verified on one iPhone 13 on iOS 27.0.
+- `open-iphone-use new` adds a USB phone. The Web UI streams each USB phone live and accepts
+  taps, Home, swipes and typing.
+- Bluetooth HID with Safari sharing is now legacy: it starts only with `serve --bluetooth`,
+  and phones are added with `new --bt`. For Xcode 26 / iOS 26, install v0.0.3.
+
 ## 0.0.3 — CLI-first multi-iPhone release (unreleased)
 
-- Add experimental CoreDevice control for a USB phone: the HEVC screen stream Xcode mirrors
-  (about 45 fps), absolute touches, a virtual keyboard and hardware buttons, over a rootless
-  tunnel with no Bluetooth, calibration or Safari sharing. Needs the `coredevice` extra,
-  iOS 27, Developer Mode and Xcode 27's Developer Disk Image; older images fall back to
-  screenshots without input. Verified on one iPhone 13 on iOS 27.0.
 
 - Add a curl installer with verified prebuilt macOS helper, source fallback, offline uninstall,
   and release asset workflow.

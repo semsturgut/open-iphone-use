@@ -9,9 +9,10 @@ async function api(path, body, image = false, method = body ? 'POST' : 'GET') {
   if (!res.ok) { const result = await res.json(); throw new Error(result.error || res.status); }
   return image ? res.blob() : res.json();
 }
-function connectionLights(container, bluetooth, sharing) {
-  const entries = [[bluetooth, 'Bluetooth connected', "Bluetooth not connected — control won't work"],
-                   [sharing, 'Screen sharing live', "Screen sharing off — control won't work"]];
+function connectionLights(container, bluetooth, sharing,
+                          input = ['Bluetooth connected', "Bluetooth not connected — control won't work"],
+                          screen = ['Screen sharing live', "Screen sharing off — control won't work"]) {
+  const entries = [[bluetooth, ...input], [sharing, ...screen]];
   container.replaceChildren(...entries.map(([on, good, bad]) => {
     const lamp = document.createElement('span'); lamp.className = `status-light ${on ? 'on' : 'off'}`;
     lamp.textContent = on ? good : bad; return lamp;
@@ -76,8 +77,29 @@ function sharingLink(label, url) {
   } catch (error) { failure(new Error(`QR code unavailable: ${error.message || error}`)); }
   return root;
 }
-let candidateKey = '';
+let candidateKey = '', usbKey = '', bluetoothEnabled = false, usbCheckedAt = 0;
 const adding = new Set();
+function usbCandidates(candidates) {
+  const key = JSON.stringify(candidates);
+  if (usbKey === key) return;
+  usbKey = key;
+  const rows = candidates.map(phone => {
+    const row = document.createElement('p');
+    const label = document.createElement('span'); label.textContent = `${phone.name || 'iPhone (trust this Mac on the phone)'}${phone.ios ? ` • iOS ${phone.ios}` : ''} • USB • ${phone.udid} `;
+    const button = document.createElement('button'); button.type = 'button';
+    button.textContent = phone.available ? 'Add phone' : 'Already added'; button.disabled = !phone.available || adding.has(phone.udid);
+    button.onclick = async () => {
+      if (adding.has(phone.udid)) return;
+      adding.add(phone.udid); button.disabled = true;
+      try { await api('/api/devices', {udid: phone.udid}); usbKey = ''; await refresh(); }
+      catch (error) { failure(error); }
+      finally { adding.delete(phone.udid); if (phone.available) button.disabled = false; }
+    };
+    row.append(label, button); return row;
+  });
+  if (!rows.length) { const empty = document.createElement('p'); empty.textContent = 'No USB phones found. Connect the iPhone by cable and trust this Mac.'; rows.push(empty); }
+  $('usb-list').replaceChildren(...rows);
+}
 function bluetoothCandidates(candidates) {
   const key = JSON.stringify(candidates);
   if (candidateKey === key) return;
@@ -131,18 +153,27 @@ function tile(device) {
     } catch (error) { failure(error); }
     finally { remove.disabled = false; }
   };
+  const usb = device.transport === 'coredevice';
+  if (usb) root.querySelector('.placeholder').textContent = 'Connecting over USB';
   const act = async (operation, arguments_ = {}) => {
     try {
-      const result = await api(`/api/devices/${value.device.device_id}/action`, {operation, arguments: {expectedFrameID: value.frame, ...arguments_}});
+      // A live USB tile has no snapshot of its own: act on the newest frame, retrying once
+      // if that frame predates the previous input.
+      let result;
+      for (let attempt = 0; attempt < (usb ? 2 : 1); attempt++) {
+        if (usb) value.frame = (await api('/api/devices')).find(d => d.device_id === value.device.device_id)?.frame_id;
+        try { result = await api(`/api/devices/${value.device.device_id}/action`, {operation, arguments: {expectedFrameID: value.frame, ...arguments_}}); break; }
+        catch (error) { if (!usb || attempt || !/before your last action/.test(error.message)) throw error; await new Promise(r => setTimeout(r, 300)); }
+      }
       root.querySelector('.result').textContent = result.message || JSON.stringify(result);
-      if (result.frame && !value.removed) await showFrame(value, result.frame);
+      if (result.frame && !value.removed && !usb) await showFrame(value, result.frame);
       return result;
     } catch (error) { root.querySelector('.result').textContent = error.message; return null; }
   };
   const img = root.querySelector('img');
   // Prepare the HID session automatically before the first tap on this tile.
   img.onclick = async event => {
-    if (value.acting || !value.device.bluetooth_connected || value.removed) return;
+    if (value.acting || !(usb || value.device.bluetooth_connected) || value.removed) return;
     value.acting = true;
     try {
       const r = img.getBoundingClientRect(), point = {x: (event.clientX-r.left)/r.width, y: (event.clientY-r.top)/r.height};
@@ -154,6 +185,18 @@ function tile(device) {
       await act('pointer_tap', point);
     } finally { value.acting = false; }
   };
+  if (usb) {
+    root.querySelector('.device-link').append(remove);
+    const controls = document.createElement('div'); controls.className = 'controls';
+    const button = (label, run) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+      b.onclick = async () => { if (value.acting) return; value.acting = true; try { await run(); } finally { value.acting = false; } }; return b; };
+    const text = document.createElement('input'); text.placeholder = 'Text to type'; text.setAttribute('aria-label', 'Text to type');
+    controls.append(button('Home', () => act('send_key', {key: 'home'})), button('Swipe up', () => act('swipe', {profile: 'up'})),
+                    button('Swipe down', () => act('swipe', {profile: 'down'})), text,
+                    button('Type', async () => { if (text.value && (await act('type_text', {text: text.value}))?.ok) text.value = ''; }),
+                    button('Return', () => act('send_key', {key: 'return'})));
+    root.querySelector('.device-link').before(controls);
+  }
   $('grid').append(root); return value;
 }
 let refreshing = false;
@@ -163,19 +206,29 @@ async function refresh() {
   try {
     const registered = await api('/api/devices');
     const globalStatus = await api('/api/status');
-    connectionLights($('global-lights'), globalStatus.bluetooth_connected, globalStatus.sharing_active);
+    if (bluetoothEnabled) connectionLights($('global-lights'), globalStatus.bluetooth_connected, globalStatus.sharing_active);
+    else $('global-lights').replaceChildren();
     if (!setupCheckedAt || Date.now() - setupCheckedAt >= 5000) {
       const setup = await api('/api/setup');
       captureOrigin = setup.capture_origin || location.origin; setupCheckedAt = Date.now();
+      bluetoothEnabled = !!setup.bluetooth_required;
     }
-    try {
-      bluetoothCandidates(await api('/api/bluetooth')); $('bluetooth-error').textContent = '';
-    } catch (error) {
-      bluetoothCandidates([]); $('bluetooth-error').textContent = error.message;
+    if (Date.now() - usbCheckedAt >= 2000) {
+      usbCheckedAt = Date.now();
+      try { usbCandidates(await api('/api/coredevices')); $('usb-error').textContent = ''; }
+      catch (error) { usbCandidates([]); $('usb-error').textContent = error.message; }
+    }
+    $('bluetooth-section').hidden = !bluetoothEnabled;
+    if (bluetoothEnabled) {
+      try {
+        bluetoothCandidates(await api('/api/bluetooth')); $('bluetooth-error').textContent = '';
+      } catch (error) {
+        bluetoothCandidates([]); $('bluetooth-error').textContent = error.message;
+      }
     }
     const devices = registered.filter(d => !removedDevices.has(d.device_id));
     $('workspace').hidden = false;
-    $('count').textContent = `${devices.filter(d => d.capture_active).length} sharing / ${devices.length} phones`;
+    $('count').textContent = `${devices.filter(d => d.capture_active).length} live / ${devices.length} phones`;
     $('empty').hidden = devices.length > 0;
     const ids = new Set(devices.map(d => d.device_id));
     for (const [id, t] of tiles) {
@@ -188,6 +241,18 @@ async function refresh() {
       if (!tiles.has(d.device_id)) tiles.set(d.device_id, tile(d));
       const t = tiles.get(d.device_id); t.device = d;
       t.root.querySelector('h2').textContent = d.name;
+      if (d.transport === 'coredevice') {
+        const ready = d.control_status === 'CoreDevice connected';
+        connectionLights(t.root.querySelector('.connection-lights'), ready, d.capture_active,
+                         ['USB control ready', 'USB control unavailable'], ['Screen live', 'Screen not live']);
+        t.root.classList.toggle('live', d.capture_active);
+        t.root.querySelector('.status').textContent = `USB • ${d.device_id.slice(0,8)}${d.age_ms == null ? '' : ` • ${d.age_ms} ms`}\n${d.control_status || 'Control unavailable'}`;
+        t.root.querySelector('.placeholder').hidden = !!d.frame_id;
+        const img = t.root.querySelector('img');
+        if (d.frame_id && img.hidden) { img.src = `/api/devices/${d.device_id}/stream`; img.hidden = false; }
+        if (!d.frame_id) { img.hidden = true; img.removeAttribute('src'); }
+        continue;
+      }
       connectionLights(t.root.querySelector('.connection-lights'), d.bluetooth_connected, d.capture_active);
       t.root.classList.toggle('live', d.capture_active);
       const sharingState = !d.frame_id ? 'Waiting for screen sharing' : d.capture_active ? 'Live' : 'Sharing paused';
@@ -209,6 +274,7 @@ async function refresh() {
     }
     for (const d of devices) {
       const t = tiles.get(d.device_id);
+      if (d.transport === 'coredevice') continue;  // Live MJPEG, no snapshots.
       if (t && !t.removed && !t.loading && !t.acting && d.frame_id && t.frame !== d.frame_id) {
         t.loading = true;
         (async () => {

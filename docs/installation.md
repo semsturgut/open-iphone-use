@@ -53,8 +53,9 @@ in the managed runtime and installs a private CPython 3.12, without changing the
 Python. Dependencies come from PyPI. On macOS the installer checks the prebuilt helper checksum and
 architecture. The helper is ad-hoc signed, not notarized. If no usable prebuilt exists, setup
 builds it with Swift 6 and Xcode Command Line Tools; installing these and accepting any license
-remain owner actions. macOS may ask for Bluetooth permission for the terminal or app that
-launches the server. On
+remain owner actions. The helper serves only the legacy Bluetooth mode (`serve --bluetooth`);
+in that mode macOS may ask for Bluetooth permission for the terminal or app that launches the
+server. On
 Linux it installs missing BlueZ/D-Bus using apt, dnf or pacman with sudo, and starts the
 Bluetooth service where systemd is available. OS package-manager permissions may prompt.
 Unsupported distributions receive an explicit dependency instruction. Run the server as
@@ -147,9 +148,9 @@ Reference schemas: [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface
 
 After installation, `open-iphone-use serve` detaches by default and prints a short status,
 the loopback Web UI and private log path. Open that Web UI directly, without a token.
-Use `serve --foreground` to debug Bluetooth permissions and `stop` to shut down. Pair via
-AssistiveTouch, use `new` (or select a Bluetooth peer in the UI), scan that phone's QR,
-then approve Safari sharing. `devices`, `status --device`, `link` and `remove` work without
+Use `serve --foreground` to debug and `stop` to shut down. Connect the iPhone by USB and
+run `new` (or select **Add phone** in the UI); its screen appears live in the Web UI. For the
+legacy Bluetooth mode see [Legacy Bluetooth setup](bluetooth-legacy.md). `devices`, `status --device`, `link` and `remove` work without
 a host browser. Distribution builds use these setup scripts and the CLI only.
 
 ## Release assets

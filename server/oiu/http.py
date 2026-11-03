@@ -8,10 +8,17 @@ import secrets
 import ssl
 import sys
 import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 
 from . import vision
 from .core import MAX_FRAME
+
+
+def coredevice_name(udid):
+    from .coredevice import candidates
+    try: return next((c.get('name') for c in candidates() if c['udid'] == udid), None)
+    except (OSError, ValueError): return None
 
 WEB = Path(__file__).parent / "web"
 
@@ -95,6 +102,27 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(body)
+
+    def stream(self, device, fps=30):
+        """Live MJPEG for the loopback Web UI: browsers render multipart JPEG in an <img>."""
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.connection.settimeout(None)
+        last = None
+        try:
+            while not device.removed and not self.server.stopped.is_set():
+                with device.lock:
+                    frame_id, jpeg = device.frame_id, device.jpeg
+                if frame_id and frame_id != last:
+                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(jpeg) + jpeg + b"\r\n")
+                    self.wfile.flush()
+                    last = frame_id
+                time.sleep(1 / fps)
+        except (ConnectionError, TimeoutError, ssl.SSLError):
+            pass  # The viewer closed the page.
 
     def body(self, limit):
         if self.headers.get("Transfer-Encoding"):
@@ -181,12 +209,12 @@ class Handler(BaseHTTPRequestHandler):
                 certificate_url = None
                 if getattr(registry, 'certificate_port', None):
                     certificate_url = f'http://{urlsplit(origin).hostname}:{registry.certificate_port}/root-ca.cer'
-                return self.reply(dict(bluetooth_required=True,capture_origin=origin,certificate_url=certificate_url,
+                return self.reply(dict(bluetooth_required=bool(registry.radio),capture_origin=origin,certificate_url=certificate_url,
                                        ca_fingerprint=getattr(registry, 'ca_fingerprint', None)))
             if path.path == "/api/devices":
                 if post:
                     data = json.loads(self.body(4096))
-                    device = registry.create_coredevice(data["udid"]) if "udid" in data else registry.create_bluetooth(data.get("bt_id"))
+                    device = registry.create_coredevice(data["udid"], coredevice_name(data["udid"])) if "udid" in data else registry.create_bluetooth(data.get("bt_id"))
                     item=next(d for d in registry.list(include_links=True) if d['device_id']==device.id)
                     return self.reply(item)
                 return self.reply(registry.list(include_links=True))
@@ -218,6 +246,8 @@ class Handler(BaseHTTPRequestHandler):
                             captureActive=device.summary()["capture_active"],
                             width=vision.dimensions(device.jpeg)[0], height=vision.dimensions(device.jpeg)[1],
                             base64=base64.b64encode(device.jpeg).decode(), mimeType="image/jpeg")))
+                if not post and parts[3] == "stream":
+                    return self.stream(device)
                 if not post and parts[3] == "frame":
                     with device.lock:
                         return self.reply(device.jpeg, mime="image/jpeg")

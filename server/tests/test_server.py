@@ -547,7 +547,7 @@ class ServerTests(unittest.TestCase):
 
     def test_new_link_and_management_mcp(self):
         base=[sys.executable,'-m','oiu.cli','--state',self.tmp.name,'--url',self.url]
-        new=subprocess.run(base+['new'],check=True,capture_output=True,text=True)
+        new=subprocess.run(base+['new','--bt','bt-c'],check=True,capture_output=True,text=True)
         self.assertIn('Phone C',new.stdout)
         self.assertIn('/capture?token=',new.stdout)
         self.assertIn('██',new.stdout)
@@ -563,12 +563,12 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(all(not r['result']['isError'] for r in replies))
         self.assertIn('capture_url',json.loads(replies[1]['result']['content'][0]['text']))
 
-    def test_cli_new_requires_explicit_selection_when_two_candidates_are_available(self):
+    def test_cli_new_bluetooth_requires_an_exact_connected_peer(self):
         self.registry.radio.items.append(dict(id='bt-d',name='Phone D',reports=[1,2]))
         base=[sys.executable,'-m','oiu.cli','--state',self.tmp.name,'--url',self.url]
-        ambiguous=subprocess.run(base+['new'],capture_output=True,text=True)
-        self.assertNotEqual(ambiguous.returncode,0)
-        self.assertIn('--bt',ambiguous.stderr)
+        unknown=subprocess.run(base+['new','--bt','bt-x'],capture_output=True,text=True)
+        self.assertNotEqual(unknown.returncode,0)
+        self.assertIn('disconnected or already added',unknown.stderr)
         selected=subprocess.run(base+['new','--bt','bt-d'],check=True,capture_output=True,text=True)
         self.assertIn('Phone D',selected.stdout)
         self.assertEqual(len(self.registry.devices),3)

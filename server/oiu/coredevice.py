@@ -1,6 +1,6 @@
 """CoreDevice backend: Xcode's remote display stream and HID over a rootless RSD tunnel.
 
-Needs the optional pymobiledevice3 dependency, Developer Mode and a USB-paired phone.
+Needs pymobiledevice3 (a macOS dependency), Developer Mode and a USB-paired phone.
 With a Developer Disk Image that ships the display and universal HID services (Xcode 27+,
 iOS 27+), the screen arrives as the HEVC stream Xcode mirrors, decoded with VideoToolbox,
 and touch and keyboard go through dtuhidd. That stream must stay up for input: it holds
@@ -26,7 +26,7 @@ DISPLAY_SERVICE = 'com.apple.coredevice.displayservice'
 SCREEN_CAPTURE_SERVICE = 'com.apple.coredevice.screencaptureservice'
 HID_UNAVAILABLE = ('This iPhone does not publish CoreDevice HID. Install Xcode 27 or later and open it once with '
                    'the phone connected; enable Settings > Developer > UI Automation if the phone shows it.')
-MISSING_DEPENDENCY = 'CoreDevice control needs pymobiledevice3: pip install "open-iphone-use-server[coredevice]"'
+MISSING_DEPENDENCY = 'USB control needs pymobiledevice3, which the macOS installer includes; rerun the installer'
 # Hardware buttons over Indigo HID (consumer page). A keyboard's Home key does nothing on an
 # iPhone, so "home" means the Home button here.
 BUTTONS = dict(home=(0x0C, 0x40), home_button=(0x0C, 0x40), lock=(0x0C, 0x30), volume_up=(0x0C, 0xE9),
@@ -65,8 +65,26 @@ def candidates():
         from pymobiledevice3.usbmux import list_devices
     except ImportError:
         raise ValueError(MISSING_DEPENDENCY) from None
-    devices = asyncio.run(list_devices())
-    return [dict(udid=d.serial, connection=d.connection_type) for d in devices if d.is_usb]
+    async def listing():
+        return [dict(udid=d.serial, connection=d.connection_type, **await details(d.serial))
+                for d in await list_devices() if d.is_usb]
+    return asyncio.run(listing())
+
+
+_details = {}
+
+
+async def details(udid):
+    """Owner-chosen name, iOS version and model, cached per UDID; empty for an untrusted host."""
+    if udid not in _details:
+        from pymobiledevice3.lockdown import create_using_usbmux
+        try:
+            lockdown = await create_using_usbmux(serial=udid, autopair=False)
+            info = lockdown.short_info
+            _details[udid] = dict(name=info.get('DeviceName'), ios=info.get('ProductVersion'), model=info.get('ProductType'))
+        except Exception:
+            return {}  # Not trusted yet: retry on the next listing.
+    return _details[udid]
 
 
 class ScreenshotConnection:
