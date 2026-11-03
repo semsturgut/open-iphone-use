@@ -31,7 +31,7 @@ if [ "$OIU_UNINSTALL" = 1 ]; then
         if [ -f "$OIU_INSTALL_ROOT/previous-cli-link" ]; then ln -s "$(cat "$OIU_INSTALL_ROOT/previous-cli-link")" "$OIU_BIN_DIR/open-iphone-use"; fi
     fi
     rm -rf "$OIU_INSTALL_ROOT"
-    echo 'Uninstalled managed runtime, CLI, and unchanged agent entries. Device state, CA, backups and user edits were preserved.'
+    echo 'Uninstalled managed runtime, CLI, and unchanged agent entries. Phone state, backups and user edits were preserved.'
     exit 0
 fi
 [ "$(uname -s)" = Darwin ] || { echo 'Open iPhone Use runs on macOS (it needs Xcode 27).' >&2; exit 2; }
