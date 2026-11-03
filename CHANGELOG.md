@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Cap the Wi-Fi screen stream at 2 Mbit/s (USB stays at 6 Mbit/s): about half the radio traffic,
+  to reduce heating during long sessions. `get_device_status` reports the negotiated bitrate.
+
 ## 0.1.0 — USB and Wi-Fi control through CoreDevice (unreleased)
 
 - Control phones through Xcode's CoreDevice services: the HEVC screen stream Xcode mirrors

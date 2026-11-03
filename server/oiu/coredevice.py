@@ -31,6 +31,10 @@ MISSING_DEPENDENCY = 'USB control needs pymobiledevice3, which the macOS install
 # iPhone, so "home" means the Home button here.
 BUTTONS = dict(home=(0x0C, 0x40), home_button=(0x0C, 0x40), lock=(0x0C, 0x30), volume_up=(0x0C, 0xE9),
                volume_down=(0x0C, 0xEA), mute=(0x0C, 0xE2), siri=(0x0C, 0xCF))
+# Over Wi-Fi the encoder is capped at this bitrate instead of the 6 Mbit/s Xcode negotiates.
+# It halves the radio traffic (and the heat that comes with it) at a softer picture; the
+# phone ignores requests for a smaller resolution.
+WIFI_MAX_BITRATE = 2_000_000
 # A static screen sends no new video frames; resend the last one so captures stay fresh.
 STILL_FRAME_SECONDS = .5
 # PyTCP's userspace stack is a process-global singleton: one USB tunnel, so one USB phone, per
@@ -56,6 +60,11 @@ def jpeg(image_bytes=None, bgra=None, size=None):
         output = io.BytesIO()
         image.convert('RGB').save(output, format='JPEG', quality=80)
         return output.getvalue()
+
+
+def capped(tiers, max_bitrate):
+    """Offer bitrate tiers with every network cap (kind 0) lowered to max_bitrate."""
+    return tuple((kind, min(bps, max_bitrate) if kind == 0 else bps, buffer) for kind, bps, buffer in tiers)
 
 
 def candidates():
@@ -169,10 +178,15 @@ def stream_connection():
             self.service = DisplayService(self._rsd)
             await self.service.connect()
             self.transport, receiver = self.media_receiver()
-            answer = await asyncio.wait_for(self.service.start_video_stream(
-                receiver_ip=receiver, receiver_port=self.transport.port, sender_ip=self._sender_ip,
-                display_id=self._display_id, client_session_id=uuid.uuid4()), 15)
+            if self._rsd.is_in_process_tunnel:
+                start = self.service.start_video_stream(
+                    receiver_ip=receiver, receiver_port=self.transport.port, sender_ip=self._sender_ip,
+                    display_id=self._display_id, client_session_id=uuid.uuid4())
+            else:
+                start = self.start_capped_stream(receiver, WIFI_MAX_BITRATE)
+            answer = await asyncio.wait_for(start, 15)
             config = answer['connection'].get('streamConfig', {})
+            self.max_bitrate = config.get('TXMaxBitrate')
             port = int(config.get('SourcePort', 0))
             # streamConfig names SSRCs from the device's side: ours is RemoteSSRC.
             self._local_ssrc, self._remote_ssrc = int(config.get('RemoteSSRC', 0)), int(config.get('LocalSSRC', 0))
@@ -183,6 +197,32 @@ def stream_connection():
                           asyncio.create_task(self._decoder_refresh_loop()),
                           asyncio.create_task(self._rtcp_send_loop(self.transport))]
             await asyncio.sleep(TOUCH_AUTH_SETTLE_SECONDS)
+
+        async def start_capped_stream(self, receiver, max_bitrate):
+            """DisplayService.start_video_stream with its bitrate tiers capped. The request is the
+            same; only the offer's network bitrate caps change, and the phone honours them."""
+            from pymobiledevice3.remote.core_device import display_service as ds, media_stream_offer as offers
+            from pymobiledevice3.remote.xpc_message import XpcInt64Type, XpcUInt64Type
+            import plistlib, random, zlib
+            tiers = capped(offers._DEFAULT_VIDEO_BITRATE_TIERS, max_bitrate)
+            blob = offers.build_media_blob_video(random.randint(0, 0xFFFFFFFF), bitrate_tiers=tiers)
+            offer = plistlib.dumps({
+                'avcMediaStreamOptionRemoteEndpointInfo': offers.build_remote_endpoint_info('Mac15,9', '2205.3.1', '25F80'),
+                'avcMediaStreamNegotiatorMode': offers.NEGOTIATOR_MODE_VIDEO,
+                'avcMediaStreamNegotiatorMediaBlob': zlib.compress(blob, level=9),
+                'avcMediaStreamOptionCallID': str(uuid.uuid4()).upper()}, fmt=plistlib.FMT_BINARY)
+            return await self.service.invoke('com.apple.coredevice.feature.startmediastream', {
+                'clientSupportedFeatures': XpcUInt64Type(ds._CLIENT_SUPPORTED_FEATURES), 'direction': 'output',
+                'negotiatorOffer': offer,
+                'options': {
+                    'AVCMediaStreamNegotiatorAccessNetworkType': {'int': XpcInt64Type(ds._DEFAULT_ACCESS_NETWORK_TYPE)},
+                    'AVCMediaStreamNegotiatorTransportProtocolType': {'int': XpcInt64Type(ds._DEFAULT_TRANSPORT_PROTOCOL_TYPE)},
+                    'CoreDeviceVideoDisplayMode': {'string': 'DisplayByID'},
+                    'VideoStreamForDisplayID': {'int': XpcInt64Type(self._display_id)},
+                    'avcMediaStreamOptionClientSessionID': {'uuid': uuid.uuid4()}},
+                'receiverIP': receiver, 'receiverPort': XpcUInt64Type(self.transport.port), 'senderIP': self._sender_ip,
+                'timeout': XpcUInt64Type(20), 'type': 'video'},
+                action_identifier='com.apple.coredevice.action.mediastreamstart')
 
         def media_receiver(self):
             """Where the phone sends RTP. pymobiledevice3 chooses the userspace stack whenever any
@@ -458,7 +498,8 @@ class CoreDeviceBackend:
         if operation == 'get_device_status':
             connection = self.connection
             return dict(ok=True, message=self.label, status=dict(
-                connection=getattr(connection, 'transport', None), udid=self.udid, connected=connection is not None,
+                connection=getattr(connection, 'transport', None), max_bitrate=getattr(connection, 'max_bitrate', None),
+                udid=self.udid, connected=connection is not None,
                 hid_available=bool(connection and connection.hid_available), captureActive=self.is_fresh(),
                 sharing_active=self.is_fresh(), error=self.error))
         try:

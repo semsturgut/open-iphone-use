@@ -70,7 +70,8 @@ Once Xcode has paired the phone over a cable, macOS can also reach it wirelessly
 cable is unplugged and both are on the same network, the phone shows up as **Wi-Fi** in
 `open-iphone-use candidates` and the Web UI, and can be added and controlled without the
 cable. If it does not appear, open Xcode's Devices window once with the phone nearby. The phone and Mac must be on the same network. Over Wi-Fi the screen arrives at a lower
-frame rate (about 12 fps in a first test) and takes longer to start.
+frame rate and a softer picture: the stream is capped at 2 Mbit/s there to save radio traffic and
+heat. For long sessions, prefer the cable.
 
 To reconnect, plug the cable back in or bring the phone onto the same Wi-Fi: the server keeps
 retrying and the phone's screen comes back in the Web UI by itself. Added phones are remembered
