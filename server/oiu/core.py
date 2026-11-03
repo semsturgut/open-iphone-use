@@ -48,6 +48,7 @@ class Device:
     bluetooth_connected: bool = False
     bluetooth_error: str = ""
     name_source: str = "fallback"
+    udid: str | None = None
 
     def require_present(self):
         if self.removed:
@@ -56,7 +57,17 @@ class Device:
     def summary(self):
         with self.lock:
             age = int((time.monotonic() - self.at) * 1000) if self.at else None
-            return dict(device_id=self.id, name=self.name, frame_id=self.frame_id,
+            live = self.active and age is not None and age <= 5000
+            if self.udid:
+                # CoreDevice phones need no Bluetooth or Safari sharing; frames come over USB.
+                return dict(device_id=self.id, name=self.name, frame_id=self.frame_id, age_ms=age,
+                            capture_active=live, hid=type(self.backend).__name__, transport='coredevice',
+                            udid=self.udid, bt_id=None, bluetooth_connected=False, bluetooth_error='',
+                            bluetooth_status='Bluetooth not used (CoreDevice)',
+                            screen_share_status='CoreDevice screen live' if live else "CoreDevice screen off — control won't work",
+                            name_source=self.name_source, sharing_active=live,
+                            control_status=getattr(self.backend, "label", "Control configured"))
+            return dict(device_id=self.id, name=self.name, frame_id=self.frame_id, transport='bluetooth',
                         age_ms=age, capture_active=self.active and age is not None and age <= 5000,
                         hid=type(self.backend).__name__, bt_id=self.bt_id,
                         bluetooth_connected=self.bluetooth_connected, bluetooth_error=self.bluetooth_error,
@@ -163,7 +174,7 @@ class Registry:
 
     def save(self):
         with self.lock:
-            data = dict(admin_token=self.admin_token, invite_token=self.invite_token, devices=[dict(id=d.id, name=d.name, token=d.token, bt_id=d.bt_id, name_source=d.name_source)
+            data = dict(admin_token=self.admin_token, invite_token=self.invite_token, devices=[dict(id=d.id, name=d.name, token=d.token, bt_id=d.bt_id, name_source=d.name_source, **(dict(udid=d.udid) if d.udid else {}))
                                                               for d in self.devices.values()])
             temporary = self.path.with_suffix(".tmp")
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -172,7 +183,7 @@ class Registry:
                 json.dump(data, file)
             os.replace(temporary, self.path)
 
-    def create(self, name, bt_id=None, name_source="fallback"):
+    def create(self, name, bt_id=None, name_source="fallback", udid=None):
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
             raise ValueError("Device name must have 1–80 characters")
         with self.lock:
@@ -180,7 +191,7 @@ class Registry:
                 raise ValueError("64-device limit reached")
             if bt_id and (bt_id in self.retiring or any(d.bt_id == bt_id for d in self.devices.values())):
                 raise ValueError('This Bluetooth phone has already been added')
-            device = Device(uuid.uuid4().hex, name.strip(), secrets.token_hex(32), bt_id=bt_id, name_source=name_source)
+            device = Device(uuid.uuid4().hex, name.strip(), secrets.token_hex(32), bt_id=bt_id, name_source=name_source, udid=udid)
             if self.backend_factory: device.backend = self.backend_factory(device)
             self.devices[device.id] = device
             try: self.save()
@@ -223,6 +234,14 @@ class Registry:
             existing = next((d for d in self.devices.values() if d.bt_id == bt_id), None)
             if existing: return existing
             return self.create(peer['name'], bt_id, peer['name_source'])
+
+    def create_coredevice(self, udid):
+        if not isinstance(udid, str) or not 1 <= len(udid) <= 64 or not all(c.isalnum() or c == '-' for c in udid):
+            raise ValueError('Select a USB-connected phone using its UDID')
+        with self.lock:
+            existing = next((d for d in self.devices.values() if d.udid == udid), None)
+            if existing: return existing
+            return self.create('iPhone ' + udid[-6:], udid=udid)
 
     def capture_device(self, token):
         with self.lock:
@@ -283,6 +302,11 @@ class Registry:
             changed = False
             result = []
             for d in self.devices.values():
+                if d.udid:
+                    item = d.summary()
+                    if include_links: item['capture_path'] = f'/capture?token={d.token}'
+                    result.append(item)
+                    continue
                 peer = peers.get(d.bt_id)
                 d.bluetooth_connected = peer is not None
                 d.bluetooth_error = error or ('' if peer else 'Bluetooth HID connection required')
@@ -301,7 +325,8 @@ class Registry:
         startup=getattr(self.radio,'startup',{}) if self.radio else {}
         state=startup.get('state','advertising' if self.radio else 'capture-only')
         on=bool(self.radio) and not error and not startup.get('error')
-        bt=all(d['bluetooth_connected'] for d in devices) if devices else bool(peers)
+        bluetooth=[d for d in devices if d['transport']=='bluetooth']
+        bt=all(d['bluetooth_connected'] for d in bluetooth) if bluetooth else bool(peers) or bool(devices)
         sharing=bool(devices) and all(d['sharing_active'] for d in devices)
         return dict(bluetooth_on=on, bluetooth_state=state, bluetooth_connected=bt,
                     sharing_active=sharing, bluetooth_connected_count=len(peers),

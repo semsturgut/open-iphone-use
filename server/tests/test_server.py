@@ -473,7 +473,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(replies[2]['result']['content'][1]['type'], 'image')
         self.assertTrue(replies[3]['result']['isError'])
         for tool in tools():
-            if tool['name'] not in ('list_devices','list_bluetooth_candidates','create_device'):
+            if tool['name'] not in ('list_devices','list_bluetooth_candidates','list_coredevice_candidates','create_device'):
                 self.assertIn('device_id', tool['inputSchema']['required'])
 
     def test_cli_serve_shutdown_and_lease_release(self):

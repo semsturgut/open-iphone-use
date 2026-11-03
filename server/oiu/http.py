@@ -185,12 +185,17 @@ class Handler(BaseHTTPRequestHandler):
                                        ca_fingerprint=getattr(registry, 'ca_fingerprint', None)))
             if path.path == "/api/devices":
                 if post:
-                    device = registry.create_bluetooth(json.loads(self.body(4096)).get("bt_id"))
+                    data = json.loads(self.body(4096))
+                    device = registry.create_coredevice(data["udid"]) if "udid" in data else registry.create_bluetooth(data.get("bt_id"))
                     item=next(d for d in registry.list(include_links=True) if d['device_id']==device.id)
                     return self.reply(item)
                 return self.reply(registry.list(include_links=True))
             if path.path == '/api/bluetooth' and not post:
                 return self.reply(registry.candidates())
+            if path.path == '/api/coredevices' and not post:
+                from .coredevice import candidates
+                added = {d.udid: d.id for d in registry.devices.values() if d.udid}
+                return self.reply([dict(c, available=c['udid'] not in added, device_id=added.get(c['udid'])) for c in candidates()])
             if path.path == '/api/health' and not post:
                 return self.reply(dict(ok=True, instance_id=getattr(registry, 'instance_id', ''), **registry.global_status()))
             if path.path == '/api/status' and not post:

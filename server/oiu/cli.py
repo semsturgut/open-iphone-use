@@ -73,7 +73,7 @@ def print_running(url,status,log):
 def serve(args,parser):
     from .bootstrap import lan_address,certificates,LANOrigin
     from .control import Pairing,Control,atomic_json
-    from .backends import create_radio
+    from .backends import create_radio,CaptureOnlyBackend
     from .certificate_server import CertificateServer
     if bool(args.cert)!=bool(args.key): parser.error('--cert and --key must be supplied together')
     host=args.host or ('127.0.0.1' if args.local_http else lan_address())
@@ -99,9 +99,18 @@ def serve(args,parser):
                 if device.bt_id is None and saved.exists(): device.bt_id=json.loads(saved.read_text()).get('peer')
                 if device.bt_id in claimed: device.bt_id=None
                 elif device.bt_id: claimed.add(device.bt_id)
-            registry.backend_factory=lambda device: Control(pairing,registry.directory/device.id,peer=device.bt_id)
-            for device in registry.devices.values(): device.backend=registry.backend_factory(device)
-            registry.save()
+            bluetooth=lambda device: Control(pairing,registry.directory/device.id,peer=device.bt_id)
+        else: bluetooth=None
+        def backend(device):
+            if device.udid:
+                from .coredevice import CoreDeviceBackend
+                return CoreDeviceBackend(device,device.udid)
+            return bluetooth(device) if bluetooth else CaptureOnlyBackend()
+        registry.backend_factory=backend
+        for device in registry.devices.values():
+            try: device.backend=backend(device)
+            except ValueError as error: print(f'{device.name}: {error}',file=sys.stderr,flush=True)
+        registry.save()
         # Auto mode follows interface changes; explicit --host remains a fixed bind.
         follow_lan = not args.local_http and not args.host and not args.cert
         bind_host = '0.0.0.0' if follow_lan else host
@@ -162,9 +171,12 @@ def main():
     start.add_argument('--no-print-secrets',action='store_true',help=argparse.SUPPRESS)
     sub.add_parser('devices'); sub.add_parser('mcp'); sub.add_parser('stop')
     sub.add_parser('bluetooth',help='List Bluetooth-connected HID phones')
+    sub.add_parser('coredevices',help='List USB phones for CoreDevice control (needs pymobiledevice3)')
     for name in ('new','add'):
         add=sub.add_parser(name,help='Select a connected Bluetooth phone and print its private link + QR')
-        add.add_argument('--bt',help='Exact Bluetooth peer ID (otherwise choose interactively)')
+        choice=add.add_mutually_exclusive_group()
+        choice.add_argument('--bt',help='Exact Bluetooth peer ID (otherwise choose interactively)')
+        choice.add_argument('--udid',help='Add a USB phone controlled over CoreDevice instead of Bluetooth')
     link=sub.add_parser('link',help='Show an existing phone sharing link + QR')
     link.add_argument('device')
     remove=sub.add_parser('remove',help='Remove a phone and revoke its sharing link')
@@ -194,6 +206,11 @@ def main():
             configure(Path(args.home),Path(sys.executable).parent/('open-iphone-use.exe' if os.name=='nt' else 'open-iphone-use'),args.skill,args.uninstall)
         elif args.command=='devices': print(json.dumps(call(args,'/api/devices'),indent=2))
         elif args.command=='bluetooth': print(json.dumps(call(args,'/api/bluetooth'),indent=2))
+        elif args.command=='coredevices': print(json.dumps(call(args,'/api/coredevices'),indent=2))
+        elif args.command in ('new','add') and args.udid:
+            result=call(args,'/api/devices',{'udid':args.udid})
+            print(f"{result['name']} [{result['device_id']}] over CoreDevice: {result['control_status']}")
+            print('No sharing link is needed; frames and touches use the USB CoreDevice tunnel.')
         elif args.command in ('new','add'):
             candidates=[p for p in call(args,'/api/bluetooth') if p['available']]
             if not candidates: raise ValueError('No unadded Bluetooth HID phones. Pair/connect in AssistiveTouch first; both keyboard and pointer subscriptions are required.')

@@ -75,6 +75,13 @@ open-iphone-use stop
 its frames and calibration; it does not remove its OS Bluetooth bond. See
 [headless server](docs/headless-server.md) for reconnect and network details.
 
+## CoreDevice control (experimental)
+
+A USB phone with Developer Mode can skip Bluetooth, AssistiveTouch and Safari sharing:
+`open-iphone-use new --udid <UDID>` uses Xcode's CoreDevice screenshots and absolute HID
+touches, with no calibration. Input needs an Xcode 27+ Developer Disk Image and
+**Settings › Developer › UI Automation**. See [CoreDevice control](docs/coredevice.md).
+
 ## Pointer and MCP
 
 The default auto-hiding AssistiveTouch pointer is supported. With Safari sharing visible,

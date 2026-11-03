@@ -2,6 +2,11 @@
 
 ## 0.0.3 — CLI-first multi-iPhone release (unreleased)
 
+- Add experimental CoreDevice control for a USB phone: absolute touches and a virtual keyboard
+  through Xcode's universal HID service, screenshots without Safari sharing, over a rootless
+  tunnel. Needs the `coredevice` extra, Developer Mode and, for input, an Xcode 27+ Developer
+  Disk Image with UI Automation enabled. Input is not yet verified on hardware.
+
 - Add a curl installer with verified prebuilt macOS helper, source fallback, offline uninstall,
   and release asset workflow.
 - Target 30 fps Safari capture; actual frame delivery depends on the phone and network.

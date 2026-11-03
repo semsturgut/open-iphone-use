@@ -24,9 +24,9 @@ PARAMETERS = {
 
 def tools():
     result = []
-    for name in ["list_devices", "list_bluetooth_candidates", "create_device", "remove_device", "get_device_status", "get_latest_screenshot", "stop_control", *sorted(ACTIONS)]:
-        props = {} if name in ("list_devices", "list_bluetooth_candidates") else {"device_id": {"type": "string"}}
-        if name == 'create_device': props = {'bt_id': {'type': 'string'}}
+    for name in ["list_devices", "list_bluetooth_candidates", "list_coredevice_candidates", "create_device", "remove_device", "get_device_status", "get_latest_screenshot", "stop_control", *sorted(ACTIONS)]:
+        props = {} if name in ("list_devices", "list_bluetooth_candidates", "list_coredevice_candidates") else {"device_id": {"type": "string"}}
+        if name == 'create_device': props = {'bt_id': {'type': 'string'}, 'udid': {'type': 'string'}}
         if name in ACTIONS:
             props["expected_frame_id"] = {"type": "string", "description": "ID of a screenshot from this device after its last input completed, at most 120 seconds old. The frameID that an action's own result returns is valid for the next action, so a new get_latest_screenshot per action is not needed; a frame captured before the last input completed is rejected."}
             props.update({key: {"type": kind} for key, kind in PARAMETERS.get(name, {}).items()})
@@ -35,6 +35,7 @@ def tools():
                 props[axis]['description'] = f'{axis} is a fraction of the FULL returned image: pixel coordinate divided by image width for x or image height for y; origin is top-left.'
         optional = {'expected_frame_id'} if name in PREPARATION else set()
         if name in ('ensure_session', 'prepare_session'): optional.update(('return_app', 'recalibrate'))
+        if name == 'create_device': optional.update(('bt_id', 'udid'))
         result.append(dict(name=name, description=f"{name.replace('_', ' ')}. Choose a device explicitly; inspect each resulting screen. HID acceptance does not prove UI success.",
                            inputSchema=dict(type="object", properties=props, required=[p for p in props if p not in optional], additionalProperties=False)))
         if name == 'scroll':
@@ -53,7 +54,9 @@ def tools():
         if name in ('swipe', 'advance_feed', 'scroll'):
             result[-1]['description'] += ' The UI may still be animating; take a fresh screenshot before targeting.'
         if name == 'create_device':
-            result[-1]['description'] = 'Create a phone bound to the explicitly selected Bluetooth HID peer from list_bluetooth_candidates. Returns its private capture_path; combine with setup capture_origin. Bluetooth must be connected before adding.'
+            result[-1]['description'] = 'Create a phone bound to exactly one of: bt_id, the explicitly selected Bluetooth HID peer from list_bluetooth_candidates (returns its private capture_path; combine with setup capture_origin; Bluetooth must be connected before adding), or udid, a USB phone from list_coredevice_candidates controlled with absolute CoreDevice touches and screenshots (no sharing link or calibration).'
+        if name == 'list_coredevice_candidates':
+            result[-1]['description'] = 'List USB-connected phones by udid for CoreDevice control (needs pymobiledevice3, Developer Mode and a trusted host). Never guess a udid.'
         if name == 'list_bluetooth_candidates':
             result[-1]['description'] = 'List connected Bluetooth HID phones, their names, availability and exact bt_id (id). Pairing in AssistiveTouch is required; never guess a peer.'
         if name == 'remove_device':
@@ -68,7 +71,7 @@ def handle(args, method, params):
         version = requested if requested in ("2024-11-05", "2025-03-26", "2025-06-18") else "2024-11-05"
         return dict(protocolVersion=version, capabilities={"tools": {}},
                     serverInfo={"name": "open-iphone-use-portable", "version": "0.0.3"},
-                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id; then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Returned images include actual pixel width and height. For coordinates use x=px/width and y=py/height over the full image, origin top-left. After swipe, advance_feed or scroll, take a fresh screenshot before targeting because UI may still be animating. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary; a frame captured before the last input completed is rejected. Screen sharing must remain active with a frame in the last five seconds. Red Bluetooth/screen sharing status means control will not work. Owner pairing/sharing/unlocking is required.")
+                    instructions="Bluetooth HID must be connected before adding a phone. List Bluetooth candidates and explicitly create_device with its bt_id (or, for a USB phone controlled over CoreDevice, list CoreDevice candidates and create_device with its udid); then list devices and choose the intended device_id. Preparation takes its own frames and needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Returned images include actual pixel width and height. For coordinates use x=px/width and y=py/height over the full image, origin top-left. After swipe, advance_feed or scroll, take a fresh screenshot before targeting because UI may still be animating. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary; a frame captured before the last input completed is rejected. Screen sharing must remain active with a frame in the last five seconds. Red Bluetooth/screen sharing status means control will not work. Owner pairing/sharing/unlocking is required.")
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -91,9 +94,13 @@ def handle(args, method, params):
             result = call(args, "/api/devices")
         elif name == 'list_bluetooth_candidates':
             result = call(args, '/api/bluetooth')
+        elif name == 'list_coredevice_candidates':
+            result = call(args, '/api/coredevices')
         elif name == 'create_device':
-            result = call(args, '/api/devices', {'bt_id': arguments['bt_id']})
-            result['capture_url'] = call(args, '/api/setup')['capture_origin'] + result['capture_path']
+            if len(arguments) != 1: raise ValueError('Pass exactly one of bt_id or udid')
+            result = call(args, '/api/devices', arguments)
+            if 'bt_id' in arguments:
+                result['capture_url'] = call(args, '/api/setup')['capture_origin'] + result['capture_path']
         else:
             device = arguments.pop("device_id")
             if not device.isalnum():
