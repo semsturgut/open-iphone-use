@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — Cooler Wi-Fi streaming
 
 - Cap the Wi-Fi screen stream at 2 Mbit/s (USB stays at 6 Mbit/s): about half the radio traffic,
   to reduce heating during long sessions. `get_device_status` reports the negotiated bitrate.

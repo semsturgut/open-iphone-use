@@ -69,7 +69,7 @@ def handle(args, method, params):
         requested = params.get("protocolVersion")
         version = requested if requested in ("2024-11-05", "2025-03-26", "2025-06-18") else "2024-11-05"
         return dict(protocolVersion=version, capabilities={"tools": {}},
-                    serverInfo={"name": "open-iphone-use", "version": "0.1.0"},
+                    serverInfo={"name": "open-iphone-use", "version": "0.1.1"},
                     instructions="Phones connect to the Mac by USB or Wi-Fi. To add one, list_candidates and create_device with its udid; then list_devices and choose the intended device_id. ensure_session needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Returned images include actual pixel width and height. For coordinates use x=px/width and y=py/height over the full image, origin top-left. Touches land exactly where given. After swipe, advance_feed or scroll, take a fresh screenshot before targeting because UI may still be animating. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary. The screen must be live (a frame within five seconds). The owner unlocks the phone; iOS permissions still apply.")
     if method == "ping":
         return {}
