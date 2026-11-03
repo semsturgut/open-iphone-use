@@ -14,6 +14,9 @@ The server opens Xcode's CoreDevice services on the phone through an RSD tunnel
   display), so there is no pointer, calibration or landing correction. Text and keys use a
   host-registered virtual keyboard; hardware buttons use Indigo HID. The video stream must stay
   up: it holds the HID authentication open.
+- **Wi-Fi bitrate:** over Wi-Fi the stream is capped at 2 Mbit/s instead of the 6 Mbit/s Xcode
+  negotiates, to halve radio traffic and the heat that comes with it. The picture is softer under
+  motion. The phone honours the cap but ignores requests for a smaller resolution.
 - **Fallback:** with an older Developer Disk Image the phone publishes neither service. The
   backend then uses screenshots (CoreDevice screen capture or DVT) and reports why input is
   unavailable.
@@ -95,6 +98,18 @@ iPhone SE 2nd generation (iPhone12,8), iOS 27.0.1, through the Web UI:
 Both phones at once, iPhone SE over USB and iPhone 13 over Wi-Fi: both streamed live in the Web
 UI at the same time. After a server restart, the saved phone reconnected and streamed again
 without any action.
+
+iPhone 13, iOS 27.0, over Wi-Fi, comparing stream settings (12 s each):
+
+| Offer | Decoded fps | Received | Negotiated |
+|---|---|---|---|
+| Default | 45.7 | 2.20 Mbit/s | 1184×2544, max 6 Mbit/s |
+| Half resolution requested | 22.5 | 1.70 Mbit/s | 1184×2544 (ignored) |
+| 2 Mbit/s cap | 36.8 | 0.90 Mbit/s | max 2 Mbit/s |
+
+With the cap in the backend, the first frame arrived after 2.7 s, the stream delivered 30 frames
+per second and `home` worked. Frame rate depends on what moves on screen. Whether the cap keeps
+the phone cool enough over a long Reels session is not measured yet.
 
 Not checked: other devices or iOS versions, long sessions, unlocked use over Wi-Fi, multi-touch,
 apps that use the camera, and the screenshot fallback's CoreDevice capture path.

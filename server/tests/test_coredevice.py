@@ -9,7 +9,7 @@ import unittest
 from PIL import Image
 
 from oiu import coredevice
-from oiu.coredevice import CoreDeviceBackend, UNIT, held, jpeg
+from oiu.coredevice import CoreDeviceBackend, UNIT, capped, held, jpeg
 from oiu.core import Device, Registry
 from oiu.keys import chord
 
@@ -146,6 +146,12 @@ class FrameTests(unittest.TestCase):
         with Image.open(io.BytesIO(jpeg(bgra=bytes([0, 0, 255, 0]) * 6, size=(2, 3)))) as image:
             self.assertEqual(image.size, (2, 3))
             self.assertGreater(image.getpixel((0, 0))[0], 200)  # BGRA red stays red.
+
+
+class BitrateTests(unittest.TestCase):
+    def test_only_network_caps_are_lowered(self):
+        tiers = ((4074, 0, 16384), (0, 75_000_000, 524288), (16, 4100, None), (0, 1_000_000, 1))
+        self.assertEqual(capped(tiers, 2_000_000), ((4074, 0, 16384), (0, 2_000_000, 524288), (16, 4100, None), (0, 1_000_000, 1)))
 
 
 class FailingOpenerTests(unittest.TestCase):
