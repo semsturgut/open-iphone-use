@@ -9,18 +9,19 @@ import unittest
 from PIL import Image
 
 from oiu import coredevice
-from oiu.coredevice import CoreDeviceBackend, UNIT, held, usages
+from oiu.coredevice import CoreDeviceBackend, UNIT, held, jpeg, usages
 from oiu.core import Device, Registry
 from oiu.hid import chord
 
 _image = io.BytesIO()
-Image.new('RGB', (9, 19), 'white').save(_image, format='PNG')
-PNG = _image.getvalue()
+Image.new('RGB', (9, 19), 'white').save(_image, format='JPEG')
+JPEG = _image.getvalue()
 
 
 class FakeConnection:
     def __init__(self, hid_available=True):
         self.hid_available = hid_available
+        self.reason = coredevice.HID_UNAVAILABLE
         self.hid = None
         self.calls = []
         self.frame_delay = .01
@@ -28,7 +29,7 @@ class FakeConnection:
     async def frames(self):
         while True:
             await asyncio.sleep(self.frame_delay)
-            yield PNG
+            yield JPEG
 
     async def touch_service(self):
         if not self.hid_available: raise OSError(coredevice.HID_UNAVAILABLE)
@@ -43,6 +44,9 @@ class FakeConnection:
 
     async def press(self, keys):
         await self.touch_service(); self.calls.append(('press', keys))
+
+    async def button(self, page, code):
+        await self.touch_service(); self.calls.append(('button', page, code))
 
     async def release(self, x, y):
         self.calls.append(('release', x, y))
@@ -109,6 +113,10 @@ class CoreDeviceTests(unittest.TestCase):
         self.act('send_key', key='cmd+h')
         self.assertEqual(self.connection.calls, [('press', (0xE3, 0x0B))])
 
+    def test_home_is_the_hardware_button(self):
+        self.act('send_key', key='home')
+        self.assertEqual(self.connection.calls, [('button', 0x0C, 0x40)])
+
     def test_swipes_and_scrolls_drag_the_finger(self):
         self.assertFalse(self.act('advance_feed', dy=1)['settled'])
         self.act('scroll', dy=600)
@@ -130,6 +138,13 @@ class CoreDeviceTests(unittest.TestCase):
         self.act('pointer_tap', x=.5, y=.5)
         self.device.action('stop_control', {})
         self.assertEqual(self.connection.calls[-1][0], 'release')
+
+
+class FrameTests(unittest.TestCase):
+    def test_decoded_bgra_becomes_jpeg(self):
+        with Image.open(io.BytesIO(jpeg(bgra=bytes([0, 0, 255, 0]) * 6, size=(2, 3)))) as image:
+            self.assertEqual(image.size, (2, 3))
+            self.assertGreater(image.getpixel((0, 0))[0], 200)  # BGRA red stays red.
 
 
 class FailingOpenerTests(unittest.TestCase):

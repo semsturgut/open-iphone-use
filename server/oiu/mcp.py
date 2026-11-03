@@ -40,6 +40,8 @@ def tools():
                            inputSchema=dict(type="object", properties=props, required=[p for p in props if p not in optional], additionalProperties=False)))
         if name == 'scroll':
             result[-1]['description'] = 'Send raw HID wheel ticks. Positive dy moves content up/advances on iOS, matching native macOS. App sensitivity varies; use modest values and verify reel identity, not video animation or ok:true.'
+        if name == 'send_key':
+            result[-1]['description'] = 'Press a key or chord on the selected phone, e.g. return, escape, cmd+space. On a CoreDevice phone, home, lock, volume_up, volume_down, mute and siri press hardware buttons.'
         if name == 'advance_feed':
             result[-1]['description'] = 'Advance to the NEXT item with dy=1 (upward drag); dy=-1 returns to the previous item. Presses, drags and releases open-loop with calibration (or a compatible fallback) and never wait for the pointer to be visible, so it works over video apps. Inspect creator/title afterward; HID acceptance is not a transition count.'
         if name in ('ensure_session', 'prepare_session'):

@@ -1,16 +1,17 @@
-"""CoreDevice backend: Xcode's remote display HID and screenshots over a rootless RSD tunnel.
+"""CoreDevice backend: Xcode's remote display stream and HID over a rootless RSD tunnel.
 
 Needs the optional pymobiledevice3 dependency, Developer Mode and a USB-paired phone.
-Touch and keyboard use dtuhidd's universal HID service. iOS only publishes it with a
-Developer Disk Image that ships it (Xcode 27+) and Settings > Developer > UI Automation
-enabled. Screenshots use the CoreDevice screen capture service, or the DVT instruments
-screenshot service with older images, so capture works before HID is available.
+With a Developer Disk Image that ships the display and universal HID services (Xcode 27+,
+iOS 27+), the screen arrives as the HEVC stream Xcode mirrors, decoded with VideoToolbox,
+and touch and keyboard go through dtuhidd. That stream must stay up for input: it holds
+backboardd's HID authentication open. Older images fall back to screenshots without input.
 Coordinates are absolute: no pointer, calibration or Safari sharing is involved.
 """
 import asyncio
 import base64
 from concurrent.futures import CancelledError
 import contextlib
+import functools
 import io
 import threading
 import time
@@ -21,10 +22,17 @@ from .hid import chord, fraction, stroke
 
 UNIT = 65535
 HID_SERVICE = 'com.apple.coredevice.hid.universalhidservice'
+DISPLAY_SERVICE = 'com.apple.coredevice.displayservice'
 SCREEN_CAPTURE_SERVICE = 'com.apple.coredevice.screencaptureservice'
-HID_UNAVAILABLE = ('This iPhone does not publish CoreDevice HID. Mount a Developer Disk Image that ships it '
-                   '(Xcode 27 or later) and enable Settings > Developer > UI Automation.')
+HID_UNAVAILABLE = ('This iPhone does not publish CoreDevice HID. Install Xcode 27 or later and open it once with '
+                   'the phone connected; enable Settings > Developer > UI Automation if the phone shows it.')
 MISSING_DEPENDENCY = 'CoreDevice control needs pymobiledevice3: pip install "open-iphone-use-server[coredevice]"'
+# Hardware buttons over Indigo HID (consumer page). A keyboard's Home key does nothing on an
+# iPhone, so "home" means the Home button here.
+BUTTONS = dict(home=(0x0C, 0x40), home_button=(0x0C, 0x40), lock=(0x0C, 0x30), volume_up=(0x0C, 0xE9),
+               volume_down=(0x0C, 0xEA), mute=(0x0C, 0xE2), siri=(0x0C, 0xCF))
+# A static screen sends no new video frames; resend the last one so captures stay fresh.
+STILL_FRAME_SECONDS = .5
 # PyTCP's userspace stack is a process-global singleton: one tunnel, so one phone, per server.
 _tunnel = threading.Lock()
 
@@ -42,9 +50,10 @@ def held(modifier, usage):
     return usages(bytes([modifier, 0, usage]))
 
 
-def jpeg(image_bytes):
+def jpeg(image_bytes=None, bgra=None, size=None):
     from PIL import Image
-    with Image.open(io.BytesIO(image_bytes)) as image:
+    image = Image.frombuffer('RGB', size, bgra, 'raw', 'BGRX', 0, 1) if bgra else Image.open(io.BytesIO(image_bytes))
+    with image:
         output = io.BytesIO()
         image.convert('RGB').save(output, format='JPEG', quality=80)
         return output.getvalue()
@@ -60,59 +69,145 @@ def candidates():
     return [dict(udid=d.serial, connection=d.connection_type) for d in devices if d.is_usb]
 
 
-class PmdConnection:
-    def __init__(self, rsd, stack):
-        self.rsd, self.stack = rsd, stack
-        self.hid = self.keyboard = None
+class ScreenshotConnection:
+    """Screen only, for images without the display stream; HID cannot authenticate here."""
+    hid = None
+    latency = 0
 
-    @property
-    def services(self):
-        return self.rsd.peer_info.get('Services', {})
+    def __init__(self, rsd, reason=HID_UNAVAILABLE):
+        self.rsd, self.reason = rsd, reason
 
-    @property
-    def hid_available(self):
-        return HID_SERVICE in self.services
+    hid_available = False
 
     async def frames(self):
-        if SCREEN_CAPTURE_SERVICE in self.services:
+        if SCREEN_CAPTURE_SERVICE in self.rsd.peer_info.get('Services', {}):
             from pymobiledevice3.remote.core_device.screen_capture_service import ScreenCaptureService
             async with ScreenCaptureService(self.rsd) as service:
                 while True:
-                    yield (await service.capture_screenshot())['image']
+                    yield await asyncio.to_thread(jpeg, (await service.capture_screenshot())['image'])
         from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
         from pymobiledevice3.services.dvt.instruments.screenshot import Screenshot
         async with DvtProvider(self.rsd) as dvt, Screenshot(dvt) as service:
             while True:
-                yield await service.get_screenshot()
+                yield await asyncio.to_thread(jpeg, await service.get_screenshot())
 
     async def touch_service(self):
-        if self.hid is None:
-            if not self.hid_available: raise OSError(HID_UNAVAILABLE)
-            from pymobiledevice3.remote.core_device.hid_service import touch_session
-            # The session's media stream holds backboardd's HID authentication open.
-            self.hid = await self.stack.enter_async_context(touch_session(self.rsd))
-        return self.hid
+        raise OSError(self.reason)
 
-    async def tap(self, x, y):
-        await (await self.touch_service()).multi_tap([(x, y)])
-
-    async def drag(self, x1, y1, x2, y2, duration):
-        await (await self.touch_service()).multi_drag([(x1, y1, x2, y2)], steps=max(8, round(duration * 60)), duration=duration)
+    tap = drag = press = button = touch_service
 
     async def release(self, x, y):
-        from pymobiledevice3.remote.core_device.hid_service import TOUCHSCREEN_STATE_RELEASE
-        if self.hid: await self.hid.send_touchscreen(TOUCHSCREEN_STATE_RELEASE, x, y)
-        if self.keyboard is not None: await self.hid.send_keyboard(self.keyboard, ())
+        pass
 
-    async def press(self, held):
-        service = await self.touch_service()
-        if self.keyboard is None: self.keyboard = await service.create_keyboard_service()
-        modifiers = tuple(u for u in held if u >= 0xE0)
-        if modifiers and len(modifiers) < len(held):
-            # iOS can ignore a modifier that arrives with its key; establish it first.
-            await service.send_keyboard(self.keyboard, modifiers); await asyncio.sleep(.04)
-        await service.send_keyboard(self.keyboard, held); await asyncio.sleep(.04)
-        await service.send_keyboard(self.keyboard, ()); await asyncio.sleep(.02)
+    async def aclose(self):
+        pass
+
+
+@functools.cache
+def stream_connection():
+    """Reuses pymobiledevice3's VNC pipeline: RTP depacketizing, VideoToolbox decode,
+    keyframe recovery and the RTCP keepalive without which iOS drops the stream in ~25 s."""
+    from pymobiledevice3.remote.core_device.display_service import DisplayService, require_video_stream_support
+    from pymobiledevice3.remote.core_device.hid_service import TOUCH_AUTH_SETTLE_SECONDS, TOUCHSCREEN_STATE_RELEASE
+    from pymobiledevice3.remote.core_device.screen_stream import open_media_receiver
+    from pymobiledevice3.remote.core_device.vnc_server import VncStreamServer
+
+    class StreamConnection(VncStreamServer):
+        hid_available = True
+        # Frames still in the encoder when an input ends may predate its effect.
+        latency = .15
+
+        def __init__(self, rsd):
+            super().__init__(rsd)
+            self.updated = asyncio.Event()
+            self.tasks = []
+            self.service = self.transport = None
+
+        @property
+        def hid(self):
+            return self._uhs
+
+        async def open(self):
+            require_video_stream_support(self._rsd)
+            self.service = DisplayService(self._rsd)
+            await self.service.connect()
+            self.transport, receiver = open_media_receiver(self.service, (8 * 1024 * 1024, 4 * 1024 * 1024))
+            answer = await asyncio.wait_for(self.service.start_video_stream(
+                receiver_ip=receiver, receiver_port=self.transport.port, sender_ip=self._sender_ip,
+                display_id=self._display_id, client_session_id=uuid.uuid4()), 15)
+            config = answer['connection'].get('streamConfig', {})
+            port = int(config.get('SourcePort', 0))
+            # streamConfig names SSRCs from the device's side: ours is RemoteSSRC.
+            self._local_ssrc, self._remote_ssrc = int(config.get('RemoteSSRC', 0)), int(config.get('LocalSSRC', 0))
+            self._rtcp_dest = (self._sender_ip, port) if port else None
+            self._active_transport = self.transport
+            self._loop = asyncio.get_running_loop()
+            self.tasks = [asyncio.create_task(self._udp_recv_and_pipe(self.transport)),
+                          asyncio.create_task(self._decoder_refresh_loop()),
+                          asyncio.create_task(self._rtcp_send_loop(self.transport))]
+            await asyncio.sleep(TOUCH_AUTH_SETTLE_SECONDS)
+
+        def _broadcast_frame(self, bgra):
+            super()._broadcast_frame(bgra)
+            self.updated.set()
+
+        async def frames(self):
+            last = None
+            while True:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self.updated.wait(), STILL_FRAME_SECONDS)
+                if self.updated.is_set() or last is None:
+                    await self.updated.wait()
+                    self.updated.clear()
+                    last = await asyncio.to_thread(jpeg, bgra=self._latest_frame, size=(self._fb_width, self._fb_height))
+                yield last
+
+        async def touch_service(self):
+            await self._ensure_hid()
+            return self._uhs
+
+        async def tap(self, x, y):
+            await (await self.touch_service()).multi_tap([(x, y)])
+
+        async def drag(self, x1, y1, x2, y2, duration):
+            await (await self.touch_service()).multi_drag([(x1, y1, x2, y2)], steps=max(8, round(duration * 60)), duration=duration)
+
+        async def release(self, x, y):
+            if self._uhs is None: return
+            await self._uhs.send_touchscreen(TOUCHSCREEN_STATE_RELEASE, x, y)
+            if self._kb_service_id is not None: await self._uhs.send_keyboard(self._kb_service_id, ())
+
+        async def button(self, page, code):
+            from pymobiledevice3.remote.core_device.hid_service import HID_BUTTON_STATE_DOWN, HID_BUTTON_STATE_UP
+            await self._ensure_indigo()
+            await self._indigo.send_button(page, code, HID_BUTTON_STATE_DOWN); await asyncio.sleep(.08)
+            await self._indigo.send_button(page, code, HID_BUTTON_STATE_UP)
+
+        async def press(self, keys):
+            await self._ensure_keyboard()
+            service, keyboard = self._uhs, self._kb_service_id
+            modifiers = tuple(u for u in keys if u >= 0xE0)
+            if modifiers and len(modifiers) < len(keys):
+                # iOS can ignore a modifier that arrives with its key; establish it first.
+                await service.send_keyboard(keyboard, modifiers); await asyncio.sleep(.04)
+            await service.send_keyboard(keyboard, keys); await asyncio.sleep(.04)
+            await service.send_keyboard(keyboard, ()); await asyncio.sleep(.02)
+
+        async def aclose(self):
+            for task in self.tasks: task.cancel()
+            for task in self.tasks:
+                with contextlib.suppress(BaseException): await task
+            await self._stop_hid()
+            if self._transcoder is not None:
+                with contextlib.suppress(Exception): self._transcoder.close()
+            if self.transport is not None:
+                with contextlib.suppress(Exception): self.transport.close()
+            if self.service is not None:
+                with contextlib.suppress(Exception): await self.service.close()
+                # Release the device-side session so the camera and microphone are freed.
+                with contextlib.suppress(Exception): await asyncio.wait_for(DisplayService.stop_all_streams(self._rsd), 6)
+
+    return StreamConnection
 
 
 @contextlib.asynccontextmanager
@@ -121,8 +216,22 @@ async def open_connection(udid):
         from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
     except ImportError:
         raise OSError(MISSING_DEPENDENCY) from None
-    async with UserspaceRsdTunnel(serial=udid) as rsd, contextlib.AsyncExitStack() as stack:
-        yield PmdConnection(rsd, stack)
+    async with UserspaceRsdTunnel(serial=udid) as rsd:
+        services = rsd.peer_info.get('Services', {})
+        connection = ScreenshotConnection(rsd)
+        if HID_SERVICE in services and DISPLAY_SERVICE in services:
+            stream = stream_connection()(rsd)
+            try:
+                await stream.open()
+                connection = stream
+            except Exception as error:  # Media in use (camera, microphone) or a wedged daemon.
+                await stream.aclose()
+                connection = ScreenshotConnection(rsd, 'The screen stream that authorizes input did not start: '
+                                                       + (str(error) or type(error).__name__))
+        try:
+            yield connection
+        finally:
+            await connection.aclose()
 
 
 class CoreDeviceBackend:
@@ -152,7 +261,7 @@ class CoreDeviceBackend:
     def label(self):
         connection = self.connection
         if self.error or connection is None: return 'CoreDevice: ' + (self.error or 'reconnecting')
-        if not connection.hid_available: return 'CoreDevice screen only: ' + HID_UNAVAILABLE
+        if not connection.hid_available: return 'CoreDevice screen only: ' + connection.reason
         return 'CoreDevice connected'
 
     def is_fresh(self):
@@ -166,8 +275,7 @@ class CoreDeviceBackend:
                     frames = connection.frames()
                     while True:
                         requested = time.monotonic()
-                        image = await anext(frames)
-                        self.deliver(await asyncio.to_thread(jpeg, image), requested)
+                        self.deliver(await anext(frames), requested)
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # Tunnel, pairing and service errors are reported, then retried.
@@ -210,6 +318,10 @@ class CoreDeviceBackend:
         finally:
             self.running = None
 
+    @property
+    def connection_latency(self):
+        return getattr(self.connection, 'latency', 0)
+
     def connected(self):
         if self.connection is None: raise OSError(self.error or 'CoreDevice tunnel is not connected')
         return self.connection
@@ -247,7 +359,11 @@ class CoreDeviceBackend:
                 await connection.press(held(modifier, usage))
             return None
         if operation == 'send_key':
-            await connection.press(usages(chord(args['key'])))
+            key = args['key']
+            if isinstance(key, str) and key.lower() in BUTTONS:
+                await connection.button(*BUTTONS[key.lower()])
+                return 'Pressed the %s hardware button' % key.lower()
+            await connection.press(usages(chord(key)))
             return None
         if operation == 'scroll':
             amount = args.get('dy', 0)
@@ -282,7 +398,7 @@ class CoreDeviceBackend:
             message = self.call(self.perform(self.connected(), operation, args))
             ended = time.monotonic()
             if operation in ('swipe', 'advance_feed', 'scroll'): time.sleep(.2)
-            self.wait_frame(ended)
+            self.wait_frame(ended + self.connection_latency)
             with self.device.lock:
                 image, frame_id, frame_at = self.device.jpeg, self.device.frame_id, self.device.at
             width, height = vision.dimensions(image)
@@ -312,7 +428,7 @@ class CoreDeviceBackend:
         with self.condition:
             self.closed = True
             self.condition.notify_all()
-        try: asyncio.run_coroutine_threadsafe(self.shutdown(), self.loop).result(10)
+        try: asyncio.run_coroutine_threadsafe(self.shutdown(), self.loop).result(20)
         except Exception: pass  # Teardown is best effort; the loop stops regardless.
         self.loop.call_soon_threadsafe(self.loop.stop)
         self.thread.join(5)

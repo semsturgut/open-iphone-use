@@ -77,10 +77,10 @@ its frames and calibration; it does not remove its OS Bluetooth bond. See
 
 ## CoreDevice control (experimental)
 
-A USB phone with Developer Mode can skip Bluetooth, AssistiveTouch and Safari sharing:
-`open-iphone-use new --udid <UDID>` uses Xcode's CoreDevice screenshots and absolute HID
-touches, with no calibration. Input needs an Xcode 27+ Developer Disk Image and
-**Settings › Developer › UI Automation**. See [CoreDevice control](docs/coredevice.md).
+A USB phone on iOS 27 with Developer Mode can skip Bluetooth, AssistiveTouch and Safari
+sharing: `open-iphone-use new --udid <UDID>` streams the screen at about 45 fps through
+Xcode's CoreDevice services and sends absolute touches, with no calibration. It needs Xcode 27,
+opened once with the phone connected. See [CoreDevice control](docs/coredevice.md).
 
 ## Pointer and MCP
 
