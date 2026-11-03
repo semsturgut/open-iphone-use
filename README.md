@@ -10,6 +10,8 @@ model or AI API key.
   key chords and the Home, Lock, volume and Siri buttons work too.
 - **Nothing on the phone:** no app, no Bluetooth pairing, no certificate, no Safari tab.
 
+![The Web UI with two iPhones live at once, both in Instagram Reels: an iPhone SE over USB and an iPhone 13 over Wi-Fi](docs/media/two-phones.png)
+
 > **Using Xcode 26 or iOS 26?** Install
 > [v0.0.3](https://github.com/semsturgut/open-iphone-use/releases/tag/v0.0.3), the last release
 > that works without Xcode 27 (Bluetooth HID and Safari screen sharing):
