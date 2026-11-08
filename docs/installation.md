@@ -59,6 +59,7 @@ Detected clients receive only this product's stdio MCP entry:
 | Cursor | `~/.cursor/mcp.json` | `mcpServers.open-iphone-use` |
 | OpenCode | `~/.config/opencode/opencode.jsonc` (preferred when present), or `.json` | `mcp.open-iphone-use`: local command array, enabled |
 | Command Code | `~/.commandcode/mcp.json` | `mcpServers.open-iphone-use`: stdio transport, enabled |
+| Antigravity | `~/.gemini/config/mcp_config.json` | `mcpServers.open-iphone-use` |
 
 Every command names the installed venv CLI and `mcp`. Legacy `/Applications/Open iPhone Use.app/…`
 entries are replaced. Unrelated settings and approval policies remain intact. OpenCode
@@ -67,9 +68,10 @@ has a private backup under `~/.local/share/open-iphone-use/registrations`; synta
 symlinked configs are refused. Backups may contain private settings: never publish them.
 
 The only installed canonical skill is `~/.agents/skills/open-iphone-use/SKILL.md` (file 644,
-directory 755 on POSIX). Detected Claude/Command Code clients get directory aliases at
-`~/.claude/skills/open-iphone-use` and `~/.commandcode/skills/open-iphone-use`, targeting
-`../../.agents/skills/open-iphone-use`. The runtime's `agent-skill.md` is a source template, not another discovered skill.
+directory 755 on POSIX). Detected Claude/Command Code/Antigravity clients get directory aliases at
+`~/.claude/skills/open-iphone-use`, `~/.commandcode/skills/open-iphone-use` and
+`~/.gemini/config/skills/open-iphone-use`, targeting `~/.agents/skills/open-iphone-use`.
+The runtime's `agent-skill.md` is a source template, not another discovered skill.
 Registration replaces stale product copies/old app aliases and removes product
 `*.open-iphone-use-backup` files in known client/skill locations; it is idempotent.
 

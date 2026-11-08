@@ -35,6 +35,8 @@ def configure(home, executable, skill=None, uninstall=False):
     if opencode.parent.exists() or shutil.which('opencode'): candidates.append((opencode,'jsonc','mcp'))
     commandcode=home/'.commandcode/mcp.json'
     if commandcode.parent.exists() or shutil.which('commandcode'): candidates.append((commandcode,'json','mcpServers'))
+    antigravity=home/'.gemini/config/mcp_config.json'
+    if antigravity.parent.exists() or (home/'.gemini/antigravity').exists() or shutil.which('agy'): candidates.append((antigravity,'json','mcpServers'))
     registered=[]
     # Uninstall considers all recorded paths even if a client executable was removed.
     if uninstall: candidates=[(Path(path),r['format'],r['key']) for path,r in manifest['entries'].items()]
@@ -84,7 +86,7 @@ def configure(home, executable, skill=None, uninstall=False):
                 if path.exists() and path.read_text()!=original: raise ValueError('config changed concurrently')
                 path.parent.mkdir(parents=True,exist_ok=True)
                 private_file(path,updated.encode())
-            registered.append({codex:'Codex',claude:'Claude Code',cursor:'Cursor',opencode:'OpenCode',commandcode:'Command Code'}.get(path,path.parent.name))
+            registered.append({codex:'Codex',claude:'Claude Code',cursor:'Cursor',opencode:'OpenCode',commandcode:'Command Code',antigravity:'Antigravity'}.get(path,path.parent.name))
             atomic_json(manifest_path,manifest)
         except (ValueError,TypeError,OSError,IndexError) as error:
             raise ValueError(f'Could not safely update {path}: {error}. Existing configuration was preserved; fix it and re-run setup') from error
@@ -106,7 +108,7 @@ def remove_directory(path):
 
 def install_skill(home, source, manifest, uninstall=False):
     canonical=home/'.agents/skills'/NAME
-    aliases=[home/client/'skills'/NAME for client in ('.claude','.commandcode')]
+    aliases=[home/client/'skills'/NAME for client in ('.claude','.commandcode','.gemini/config')]
     if uninstall:
         for alias in aliases:
             if alias.is_symlink() and alias.resolve()==canonical.resolve(): alias.unlink()
@@ -125,7 +127,7 @@ def install_skill(home, source, manifest, uninstall=False):
         source=next((p for p in sources if p.is_file()),None)
         if source is None: raise ValueError('Skill source not found; re-run setup or supply --skill PATH')
     content=Path(source).read_bytes()  # Read before removing stale aliases/copies.
-    roots=[home/client/'skills' for client in ('.agents','.claude','.commandcode','.codex','.cursor')]
+    roots=[home/client/'skills' for client in ('.agents','.claude','.commandcode','.codex','.cursor','.gemini/config')]
     for root in roots:
         if not root.exists(): continue
         for backup in root.rglob('*.open-iphone-use-backup'):
@@ -146,7 +148,7 @@ def install_skill(home, source, manifest, uninstall=False):
     manifest['aliases']=[]
     for alias in aliases:
         client=alias.parent.parent
-        if not client.exists() and not (client==home/'.claude' and (home/'.claude.json').exists()): continue
+        if not client.exists() and not (client==home/'.claude' and (home/'.claude.json').exists()) and not (client==home/'.gemini/config' and (home/'.gemini/antigravity').exists()): continue
         alias.parent.mkdir(parents=True,exist_ok=True)
         relative=os.path.relpath(canonical,alias.parent)
         try: alias.symlink_to(relative,target_is_directory=True)
@@ -158,7 +160,7 @@ def install_skill(home, source, manifest, uninstall=False):
             except (OSError,subprocess.CalledProcessError): shutil.copytree(canonical,alias)
         manifest['aliases'].append(str(alias))
     # Remove obsolete product backup files beside client configs too.
-    for client in ('','.agents','.claude','.commandcode','.codex','.cursor','.config/opencode'):
+    for client in ('','.agents','.claude','.commandcode','.codex','.cursor','.config/opencode','.gemini/config'):
         root=home/client
         if root.exists():
             for backup in root.glob('*.open-iphone-use-backup'):

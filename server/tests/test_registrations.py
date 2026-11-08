@@ -17,7 +17,7 @@ class RegistrationTests(unittest.TestCase):
     def test_all_clients_canonical_skill_aliases_legacy_migration_and_idempotence(self):
         with tempfile.TemporaryDirectory() as directory, patch('oiu.registrations.shutil.which',return_value=None):
             home=Path(directory)
-            for client in ('.codex','.claude','.cursor','.commandcode','.config/opencode'):
+            for client in ('.codex','.claude','.cursor','.commandcode','.config/opencode','.gemini/config'):
                 (home/client).mkdir(parents=True)
             old={'command':'/Applications/Open iPhone Use.app/Contents/Helpers/open-iphone-use','args':['mcp']}
             opencode=home/'.config/opencode/opencode.jsonc'
@@ -46,9 +46,11 @@ class RegistrationTests(unittest.TestCase):
             self.assertEqual((canonical/'SKILL.md').read_text(),'Canonical skill')
             self.assertEqual(canonical.stat().st_mode&0o777,0o755)
             self.assertEqual((canonical/'SKILL.md').stat().st_mode&0o777,0o644)
-            for client in ('.claude','.commandcode'):
+            for client,target in (('.claude','../../.agents/skills/open-iphone-use'),
+                                  ('.commandcode','../../.agents/skills/open-iphone-use'),
+                                  ('.gemini/config','../../../.agents/skills/open-iphone-use')):
                 alias=home/client/'skills/open-iphone-use'
-                self.assertEqual(os.readlink(alias),'../../.agents/skills/open-iphone-use')
+                self.assertEqual(os.readlink(alias),target)
                 self.assertEqual(alias.resolve(),canonical.resolve())
             self.assertFalse(old_dir.exists())
             self.assertFalse(broken.is_symlink())

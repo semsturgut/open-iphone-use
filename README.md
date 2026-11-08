@@ -80,7 +80,7 @@ across server restarts.
 ## MCP
 
 Setup registers the MCP server and agent skill for detected clients (Codex, Claude Code,
-Cursor, OpenCode, Command Code). Use an image-capable agent. The tools:
+Cursor, OpenCode, Command Code, Antigravity). Use an image-capable agent. The tools:
 
 - **Setup and status:** `list_candidates`, `create_device` (with `udid`), `remove_device`,
   `list_devices`, `get_device_status`, `get_latest_screenshot`, `stop_control`.
