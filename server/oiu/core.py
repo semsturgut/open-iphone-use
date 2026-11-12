@@ -16,9 +16,9 @@ FRAME_MAX_AGE = 120.0
 # At 45 fps this retains three minutes of IDs, including expired IDs so their age can be reported.
 FRAME_HISTORY_LIMIT = 8192
 MAX_FRAME = 4 * 1024 * 1024
-PREPARATION = {"ensure_session"}
+PREPARATION = {"ensure_session", "get_ui_tree", "tap_ref", "batch"}
 ACTIONS = {"ensure_session", "pointer_tap", "pointer_move", "click", "type_text", "send_key", "scroll",
-           "swipe", "advance_feed"}
+           "swipe", "advance_feed", "get_ui_tree", "tap_ref", "batch"}
 
 
 class Unavailable:
@@ -97,6 +97,7 @@ class Device:
             raise ValueError("Unknown action")
         if not self.slots.acquire(blocking=False):
             raise ValueError("Device action queue full")
+        entered_backend = False
         try:
             generation = self.epoch
             with self.action_lock:
@@ -120,11 +121,15 @@ class Device:
                 # delivered partial input. Frames arriving during the call do not
                 # prove that the caller observed its final effect.
                 try:
+                    entered_backend = True
                     result = self.backend.request(operation, **arguments)
-                    if not result.get("ok"):
-                        self.backend.request("stop_control")
+                    if result.get("inputSent") is False or operation == "get_ui_tree":
+                        pass  # Read-only and rejected ref checks send no cleanup input.
+                    elif not result.get("ok"):
+                        if result.get('cleanupRequired', True):
+                            self.backend.request("stop_control")
                         with self.lock:
-                            self.last_input_completed_at = time.monotonic()
+                            self.last_input_completed_at = result.get('inputEndedAt') or time.monotonic()
                     else:
                         with self.lock:
                             # The backend reports when the input actually ended;
@@ -138,11 +143,13 @@ class Device:
                         result.update(settled=False, settle_hint='UI may still be animating; take a fresh screenshot before targeting.')
                     return result
                 except (OSError, ValueError):
-                    with self.lock:
-                        self.last_input_completed_at = time.monotonic()
+                    if operation != 'get_ui_tree':
+                        with self.lock:
+                            self.last_input_completed_at = time.monotonic()
                     raise
         except (OSError, ValueError):
-            self.backend.request("stop_control")
+            if operation != 'get_ui_tree' and (entered_backend or operation not in ('tap_ref', 'batch')):
+                self.backend.request("stop_control")
             raise
         finally:
             self.slots.release()

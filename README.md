@@ -80,23 +80,44 @@ across server restarts.
 ## MCP
 
 Setup registers the MCP server and agent skill for detected clients (Codex, Claude Code,
-Cursor, OpenCode, Command Code, Antigravity). Use an image-capable agent. The tools:
+Cursor, OpenCode, Command Code, Antigravity). Agents can find controls through accessibility.
+Visual targeting also needs an image-capable model.
 
-- **Setup and status:** `list_candidates`, `create_device` (with `udid`), `remove_device`,
-  `list_devices`, `get_device_status`, `get_latest_screenshot`, `stop_control`.
-- **Input:** `ensure_session`, `pointer_tap`, `type_text`, `send_key`, `swipe`, `scroll`,
-  `advance_feed`. `send_key` also takes `home`, `lock`, `volume_up`, `volume_down`, `mute` and
-  `siri`.
+- Use `get_ui_tree(device_id)` for compact `ref|action|role|label|value` rows, then
+  `tap_ref(device_id, ref)` to touch a control. Ref calls check the live element token,
+  geometry, visibility, enabled state and frontmost hit target. Changed or covered targets
+  are refused before touch input. Refs expire after 120 seconds or reconnect.
+- Use `batch(device_id, steps)` for up to 16 ordered steps under one device lock. Every step
+  supplies `operation` and its arguments. Supported operations are `tap_ref`, `get_ui_tree`,
+  `type_text`, `send_key`, `scroll`, `swipe` and `advance_feed`. A failed step stops the batch. Execution has an 80-second total budget.
+  Receipts include `completed`, `stoppedAt` and each step's result. A tree step provides refs
+  for a subsequent call.
+- `image_mode` accepts `full`, `preview` or `none` on screenshot and action tools. Preview
+  JPEGs have a longest edge up to 640 pixels. Every mode includes `screenHash`, the SHA-256
+  of the native JPEG, and frame metadata with native `sourceWidth` and `sourceHeight`.
+  Tree, ref and batch tools default to `none`. Existing tools default to `full`.
+- Setup and status tools include `list_candidates`, `create_device` with `udid`,
+  `remove_device`, `list_devices`, `get_device_status`, `get_latest_screenshot` and
+  `stop_control`.
+- Input tools include `ensure_session`, `pointer_tap`, `type_text`, `send_key`, `swipe`,
+  `scroll` and `advance_feed`. `send_key` accepts `home`, `lock`, `volume_up`, `volume_down`,
+  `mute` and `siri`.
+- Coordinate tools use fractions of the full returned image, `x = px / width` and
+  `y = py / height`. Legacy coordinate, keyboard and gesture calls require a frame ID
+  captured after the last input. Ref calls use live accessibility checks.
+- Input is serialized per phone. Inspect the resulting tree or screenshot to verify the UI
+  outcome. The owner unlocks the phone and approves iOS prompts.
 
-How the tools work:
+```json
+{"name":"get_ui_tree","arguments":{"device_id":"PHONE_ID"}}
+{"name":"tap_ref","arguments":{"device_id":"PHONE_ID","ref":"REF_FROM_TREE"}}
+{"name":"batch","arguments":{"device_id":"PHONE_ID","steps":[{"operation":"send_key","key":"home"},{"operation":"get_ui_tree"}]}}
+```
 
-- **Coordinates:** fractions of the full returned image (`x = px / width`, `y = py / height`).
-- **Frames:** every action needs a frame ID captured after the phone's last input. Each action
-  returns a new frame, so the agent can check the result before the next step.
-- **Verifying results:** input is serialized per phone. An `ok: true` result does not prove the
-  UI changed, so inspect the returned screen after every action.
-- **iOS rules still apply:** the owner unlocks the phone, and iOS permissions and protected
-  content stay in force.
+Accessibility uses the phone's `remoteAXService` through the existing RSD connection.
+An empty or changing tree read retries once within a 25-second budget. Some apps and alerts
+expose incomplete accessibility data. Refresh after transitions and use visual targeting
+when needed. Live checks precede HID delivery, so external UI changes can still race input.
 
 ## Limits
 

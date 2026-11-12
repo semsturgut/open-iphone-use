@@ -8,7 +8,6 @@ backboardd's HID authentication open. Older images fall back to screenshots with
 Coordinates are absolute: no pointer, calibration or Safari sharing is involved.
 """
 import asyncio
-import base64
 from concurrent.futures import CancelledError
 import contextlib
 import functools
@@ -17,7 +16,8 @@ import threading
 import time
 import uuid
 
-from . import vision
+from .accessibility import AccessibilitySession, AXError
+from .frames import frame_payload, image_mode
 from .keys import chord, fraction, stroke
 
 UNIT = 65535
@@ -122,6 +122,7 @@ class ScreenshotConnection:
 
     def __init__(self, rsd, reason=HID_UNAVAILABLE):
         self.rsd, self.reason = rsd, reason
+        self.accessibility = AccessibilitySession(rsd)
 
     hid_available = False
 
@@ -146,7 +147,7 @@ class ScreenshotConnection:
         pass
 
     async def aclose(self):
-        pass
+        await self.accessibility.close()
 
 
 @functools.cache
@@ -165,6 +166,8 @@ def stream_connection():
 
         def __init__(self, rsd):
             super().__init__(rsd)
+            self.accessibility = AccessibilitySession(rsd)
+            self.latency = .03 if rsd.is_in_process_tunnel else .15
             self.updated = asyncio.Event()
             self.tasks = []
             self.service = self.transport = None
@@ -287,6 +290,7 @@ def stream_connection():
             await service.send_keyboard(keyboard, ()); await asyncio.sleep(.02)
 
         async def aclose(self):
+            await self.accessibility.close()
             for task in self.tasks: task.cancel()
             for task in self.tasks:
                 with contextlib.suppress(BaseException): await task
@@ -492,6 +496,89 @@ class CoreDeviceBackend:
             return 'Dragged ' + direction + (', always verify the next item in the returned frame' if operation == 'advance_feed' else '')
         raise ValueError('Unknown control operation')
 
+    def response_frame(self, mode):
+        with self.device.lock:
+            image, frame_id, frame_at = self.device.jpeg, self.device.frame_id, self.device.at
+        return frame_payload(image, mode, frameID=frame_id, captureActive=self.is_fresh(),
+                             ageMilliseconds=int((time.monotonic() - frame_at) * 1000))
+
+    def validate_batch(self, steps):
+        fields = {'tap_ref': {'ref'}, 'get_ui_tree': set(), 'type_text': {'text'},
+                  'send_key': {'key'}, 'scroll': {'dy'}, 'swipe': {'profile'}, 'advance_feed': {'dy'}}
+        if not isinstance(steps, list) or not 1 <= len(steps) <= 16:
+            raise ValueError('Batch must contain 1 to 16 steps')
+        for step in steps:
+            if not isinstance(step, dict) or not isinstance(step.get('operation'), str) or step['operation'] not in fields:
+                raise ValueError('Unsupported batch operation')
+            operation = step['operation']
+            if set(step) != fields[operation] | {'operation'}:
+                raise ValueError('Invalid or missing batch step arguments')
+            if operation == 'tap_ref' and (not isinstance(step['ref'], str) or not step['ref']):
+                raise ValueError('Invalid ref')
+            if operation == 'type_text':
+                value = step['text']
+                if not isinstance(value, str) or len(value.encode()) > 500:
+                    raise ValueError('Text must contain at most 500 ASCII bytes')
+                for character in value:
+                    stroke(character)
+            if operation == 'send_key':
+                value = step['key']
+                if not isinstance(value, str):
+                    raise ValueError('Invalid key')
+                if value.lower() not in BUTTONS:
+                    chord(value)
+            if operation == 'scroll' and (type(step['dy']) is not int or abs(step['dy']) > 1200):
+                raise ValueError('Scroll dy must be an integer -1200…1200')
+            if operation == 'advance_feed' and (type(step['dy']) is not int or step['dy'] not in (-1, 1)):
+                raise ValueError('Feed dy must be 1 or -1')
+            if operation == 'swipe' and step['profile'] not in ('up', 'down', 'left', 'right'):
+                raise ValueError('Swipe direction must be up/down/left/right')
+
+    async def execute(self, connection, operation, args):
+        if operation == 'get_ui_tree':
+            return await connection.accessibility.refresh()
+        if operation == 'tap_ref':
+            try:
+                await connection.touch_service()
+                point = await connection.accessibility.checked_point(args['ref'])
+            except AXError:
+                raise
+            except Exception as error:
+                raise AXError('accessibilityUnavailable', str(error) or 'Accessibility target check failed') from error
+            # No await between admission and entering the existing HID path.
+            self.point = point
+            await connection.tap(*map(units, point))
+            message = 'Touched checked accessibility target'
+        else:
+            message = await self.perform(connection, operation, args)
+        ended = time.monotonic()
+        await asyncio.to_thread(self.wait_frame, ended + self.connection_latency)
+        return dict(ok=True, message=message or 'Input completed. Inspect the result to verify the UI outcome.',
+                    inputEndedAt=ended, inputSent=operation != 'pointer_move', commandID=str(uuid.uuid4()))
+
+    async def execute_batch(self, connection, steps):
+        results = []
+        ended = None
+        deadline = asyncio.get_running_loop().time() + 80
+        for index, step in enumerate(steps):
+            if not self.is_fresh():
+                result = dict(ok=False, code='screenStale', message='Screen is no longer live', inputSent=False)
+            else:
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        result = await self.execute(connection, step['operation'], {k: v for k, v in step.items() if k != 'operation'})
+                except (ValueError, OSError, TimeoutError) as error:
+                    result = dict(ok=False, code=getattr(error, 'code', 'actionFailed'), message=str(error),
+                                  inputSent=not isinstance(error, AXError) and step['operation'] != 'get_ui_tree')
+            results.append(dict(index=index, **result))
+            ended = result.get('inputEndedAt', ended)
+            if not result.get('ok'):
+                break
+        return dict(ok=all(r['ok'] for r in results), results=results, completed=sum(r['ok'] for r in results),
+                    inputEndedAt=ended, inputSent=any(r.get('inputSent') for r in results),
+                    stoppedAt=results[-1]['index'] if not results[-1]['ok'] else None,
+                    cleanupRequired=not results[-1]['ok'] and results[-1].get('inputSent', True))
+
     def request(self, operation, **args):
         if self.closed: raise ValueError('Device removed or control closed')
         if operation == 'stop_control': return self.stop_capture()
@@ -503,23 +590,24 @@ class CoreDeviceBackend:
                 hid_available=bool(connection and connection.hid_available), captureActive=self.is_fresh(),
                 sharing_active=self.is_fresh(), error=self.error))
         try:
-            message = self.call(self.perform(self.connected(), operation, args))
-            ended = time.monotonic()
-            if operation in ('swipe', 'advance_feed', 'scroll'): time.sleep(.2)
-            self.wait_frame(ended + self.connection_latency)
-            with self.device.lock:
-                image, frame_id, frame_at = self.device.jpeg, self.device.frame_id, self.device.at
-            width, height = vision.dimensions(image)
-            result = dict(ok=True, message=message or 'Input completed. Inspect the returned screen to verify the UI outcome.',
-                          inputEndedAt=ended, commandID=str(uuid.uuid4()),
-                          frame=dict(frameID=frame_id, captureActive=self.is_fresh(),
-                                     ageMilliseconds=int((time.monotonic() - frame_at) * 1000), mimeType='image/jpeg',
-                                     width=width, height=height, base64=base64.b64encode(image).decode()))
+            mode = image_mode(args.get('image_mode', 'none' if operation in ('get_ui_tree', 'tap_ref', 'batch') else 'full'))
+            if operation == 'batch':
+                self.validate_batch(args.get('steps'))
+        except ValueError as error:
+            return dict(ok=False, code='invalidArguments', message=str(error), inputSent=False)
+        try:
+            connection = self.connected()
+            if operation == 'batch':
+                result = self.call(self.execute_batch(connection, args['steps']), timeout=85)
+            else:
+                result = self.call(self.execute(connection, operation, args))
+            result['frame'] = self.response_frame(mode)
             if operation == 'pointer_tap':
                 result.update(target=list(self.point))
             return result
-        except (ValueError, OSError) as error:
-            return dict(ok=False, message=str(error))
+        except (ValueError, OSError, TimeoutError) as error:
+            return dict(ok=False, code=getattr(error, 'code', 'actionFailed'), message=str(error),
+                        inputSent=not isinstance(error, AXError) and operation != 'get_ui_tree')
 
     def stop_capture(self):
         running = self.running
@@ -539,6 +627,8 @@ class CoreDeviceBackend:
         except Exception: pass  # Teardown is best effort; the loop stops regardless.
         self.loop.call_soon_threadsafe(self.loop.stop)
         self.thread.join(5)
+        if not self.thread.is_alive():
+            self.loop.close()
 
     async def shutdown(self):
         # Cancel inside the loop and await it so the tunnel unwinds before the loop stops.

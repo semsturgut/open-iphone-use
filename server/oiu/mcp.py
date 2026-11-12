@@ -17,9 +17,13 @@ PARAMETERS = {
     "pointer_tap": {"x": "number", "y": "number"}, "pointer_move": {"x": "number", "y": "number"},
     "swipe": {"profile": "string"}, "advance_feed": {"dy": "integer"},
     "ensure_session": {"return_app": "string"},
+    "tap_ref": {"ref": "string"}, "batch": {"steps": "array"},
 }
 FRACTION = '{axis} is a fraction of the FULL returned image: pixel coordinate divided by image {size}; origin is top-left.'
 DESCRIPTIONS = {
+    'get_ui_tree': 'Read the accessibility tree once as compact ref|action|role|label|value rows. No screenshot needed. Refresh to discover new controls. Refs expire after 120 seconds or reconnect.',
+    'tap_ref': 'Tap an observed accessibility ref after live identity, geometry and coverage checks. Refuses changed or covered targets before any input. Defaults to image_mode=none.',
+    'batch': 'Run 1 to 16 ordered steps under one device lock with an 80-second execution budget. Stops at the first failure, with per-step receipts and completed count. Steps use operation plus its arguments. Supported operations are tap_ref, get_ui_tree, type_text, send_key, scroll, swipe and advance_feed. All step syntax is validated before input. Refs are checked live at each tap. Use existing refs, or refresh with get_ui_tree between batches to discover new controls. Defaults to image_mode=none.',
     'list_devices': 'List added phones with device_id, name, connection status and frame age.',
     'list_candidates': 'List connected phones (USB or Wi-Fi) with udid, name, iOS version and whether they are already added. Never guess a udid.',
     'create_device': 'Add the phone with this udid from list_candidates. Its screen streams live; no calibration is needed.',
@@ -44,6 +48,8 @@ def tools():
     for name in ["list_devices", "list_candidates", "create_device", "remove_device", "get_device_status", "get_latest_screenshot", "stop_control", *sorted(ACTIONS)]:
         props = {} if name in ("list_devices", "list_candidates") else {"device_id": {"type": "string"}}
         if name == 'create_device': props = {'udid': {'type': 'string'}}
+        if name in ('get_latest_screenshot', *ACTIONS):
+            props['image_mode'] = {'type': 'string', 'enum': ['full', 'preview', 'none'], 'description': 'full returns the native JPEG, preview returns a JPEG with longest edge up to 640 pixels, none returns metadata and screenHash only. Legacy tools default to full. Tree, ref and batch tools default to none. screenHash is SHA-256 of the native JPEG, independent of preview sizing.'}
         if name in ACTIONS:
             props["expected_frame_id"] = {"type": "string", "description": "ID of a screenshot from this device after its last input completed, at most 120 seconds old. The frameID that an action's own result returns is valid for the next action, so a new get_latest_screenshot per action is not needed; a frame captured before the last input completed is rejected."}
             props.update({key: {"type": kind} for key, kind in PARAMETERS.get(name, {}).items()})
@@ -51,6 +57,14 @@ def tools():
             props['x']['description'] = FRACTION.format(axis='x', size='width')
             props['y']['description'] = FRACTION.format(axis='y', size='height')
         optional = {'expected_frame_id'} if name in PREPARATION else set()
+        optional.add('image_mode')
+        if name == 'batch':
+            props['steps']['minItems'] = 1
+            props['steps']['maxItems'] = 16
+            props['steps']['items'] = {'oneOf': [
+                {'type': 'object', 'properties': {'operation': {'const': op}, **{k: {'type': t} for k, t in PARAMETERS.get(op, {}).items()}},
+                 'required': ['operation', *PARAMETERS.get(op, {})], 'additionalProperties': False}
+                for op in ('tap_ref', 'get_ui_tree', 'type_text', 'send_key', 'scroll', 'swipe', 'advance_feed')]}
         if name == 'ensure_session': optional.add('return_app')
         description = DESCRIPTIONS[name] + ' Choose a device explicitly; an accepted action does not prove the UI changed, so inspect each resulting screen.'
         if name in ('get_latest_screenshot', *ACTIONS):
@@ -69,8 +83,8 @@ def handle(args, method, params):
         requested = params.get("protocolVersion")
         version = requested if requested in ("2024-11-05", "2025-03-26", "2025-06-18") else "2024-11-05"
         return dict(protocolVersion=version, capabilities={"tools": {}},
-                    serverInfo={"name": "open-iphone-use", "version": "0.1.1"},
-                    instructions="Phones connect to the Mac by USB or Wi-Fi. To add one, list_candidates and create_device with its udid; then list_devices and choose the intended device_id. ensure_session needs no expected_frame_id. For other input use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Returned images include actual pixel width and height. For coordinates use x=px/width and y=py/height over the full image, origin top-left. Touches land exactly where given. After swipe, advance_feed or scroll, take a fresh screenshot before targeting because UI may still be animating. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary. The screen must be live (a frame within five seconds). The owner unlocks the phone; iOS permissions still apply.")
+                    serverInfo={"name": "open-iphone-use", "version": "0.2.0"},
+                    instructions="Prefer get_ui_tree to find controls without images, then tap_ref with its ref. Live checks reject moved or covered targets. batch serializes up to 16 steps and stops on failure. image_mode=none omits image bytes and preview downsizes to 640 pixels, both preserve screenHash and frameID. Refresh the tree to discover new refs. Phones connect to the Mac by USB or Wi-Fi. To add one, list_candidates and create_device with its udid; then list_devices and choose the intended device_id. ensure_session needs no expected_frame_id. For legacy coordinate, keyboard and gesture tools use a screenshot ID for that phone captured after its last input completed and at most 120 seconds old. Returned images include actual pixel width and height. For coordinates use x=px/width and y=py/height over the full image, origin top-left. Touches land exactly where given. After swipe, advance_feed or scroll, take a fresh screenshot before targeting because UI may still be animating. Every action result carries its own frameID, captured after the input ended and valid for the next action, so an extra get_latest_screenshot after each action is unnecessary. The screen must be live (a frame within five seconds). The owner unlocks the phone; iOS permissions still apply.")
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -86,8 +100,8 @@ def handle(args, method, params):
         for key, value in arguments.items():
             kind = schema["properties"][key]["type"]
             valid = {"string": isinstance(value, str), "integer": type(value) is int,
-                     "number": type(value) in (int, float), "boolean": type(value) is bool}[kind]
-            if not valid:
+                     "number": type(value) in (int, float), "boolean": type(value) is bool, "array": isinstance(value, list)}[kind]
+            if not valid or ('enum' in schema['properties'][key] and value not in schema['properties'][key]['enum']):
                 raise ValueError(f"Invalid {key}")
         if name == "list_devices":
             result = call(args, "/api/devices")
@@ -105,16 +119,18 @@ def handle(args, method, params):
             elif name == "get_device_status":
                 result = call(args, path + "status")
             elif name == "get_latest_screenshot":
-                result = call(args, path + "snapshot")
+                result = call(args, path + "snapshot?image_mode=" + arguments.get("image_mode", "full"))
             else:
                 if "expected_frame_id" in arguments:
                     arguments["expectedFrameID"] = arguments.pop("expected_frame_id")
                 result = call(args, path + "action", dict(operation=name, arguments=arguments))
         frame = result.pop("frame", None) if isinstance(result, dict) else None
         content = [{"type": "text", "text": json.dumps(result)}]
-        if frame:
+        if frame and frame.get("base64"):
             content.extend([{"type": "image", "mimeType": "image/jpeg", "data": frame["base64"]},
                             {"type": "text", "text": json.dumps({k: v for k, v in frame.items() if k != "base64"})}])
+        elif frame:
+            content.append({'type': 'text', 'text': json.dumps(frame)})
         return dict(content=content, isError=isinstance(result, dict) and result.get("ok") is False)
     except (URLError, ConnectionError, TimeoutError) as error:
         LOG.warning('Server connection unavailable: %s', error)
