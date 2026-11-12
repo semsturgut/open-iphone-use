@@ -4,17 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-iphone-use-server"
-version = "0.1.1"
+version = "0.2.0"
 requires-python = ">=3.11"
 description = "Let AI agents use your iPhone over USB or Wi-Fi through Xcode's CoreDevice services"
 dependencies = [
     "Pillow>=11,<14", "tomlkit>=0.13,<1",
-    # CoreDevice: rootless RSD tunnel, VideoToolbox stream decode and HID.
-    "pymobiledevice3>=11.49,<12",
+    # CoreDevice callback APIs are private. 11.52 changes _broadcast_frame.
+    # Pin the version physically verified with this stream/HID integration.
+    "pymobiledevice3==11.49.5",
 ]
 
 [project.scripts]
 open-iphone-use = "oiu.cli:main"
 
 [tool.setuptools.package-data]
-oiu = ["web/*"]
+oiu = ["web/*", "AXE_LICENSE.txt"]

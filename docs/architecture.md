@@ -16,9 +16,15 @@ flowchart LR
   pipeline (RTP depacketizing, VideoToolbox decode, keyframe recovery and the RTCP keepalive)
   and turns frames into JPEGs. Touches and keys go to dtuhidd's universal HID service, which
   only accepts input while that stream runs; buttons go through Indigo HID.
+- **`accessibility.py`** opens a separate DTX subscription on the existing RSD connection,
+  admits matching InitialDump and AdditionalData trees, decodes inert keyed archives, and
+  checks refs with live attributes and hit testing before entering the HID input path.
+- **`frames.py`** formats full, 640-pixel preview or metadata-only responses and hashes the
+  native JPEG. Capture and coordinate fractions retain their existing representation.
 - **`core.py`** keeps each phone's latest frame and a frame-ID history, and serializes actions
   per phone. Input needs a frame captured after the phone's last input, at most 120 seconds
-  old, while the screen is live.
+  old, while the screen is live. Ref actions perform live accessibility admission. A batch
+  holds the same queue lock for all steps and stops at its first failure.
 - **`http.py`** serves the Web UI, the JSON API and a live MJPEG stream per phone on loopback.
 - **`mcp.py`** is a stdio MCP server that calls that API.
 

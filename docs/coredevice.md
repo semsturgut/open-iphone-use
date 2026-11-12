@@ -113,3 +113,40 @@ the phone cool enough over a long Reels session is not measured yet.
 
 Not checked: other devices or iOS versions, long sessions, unlocked use over Wi-Fi, multi-touch,
 apps that use the camera, and the screenshot fallback's CoreDevice capture path.
+
+
+### 0.2.0 accessibility and response validation
+
+2026-11-12, macOS 27.2, Xcode 27.2, pymobiledevice3 11.49.5.
+The reference protocol was reviewed at AXe commit
+`3e4100f6805b78a2b457935afa086e95d1c8cf7d`.
+
+- iPhone SE 2nd generation, iOS 27.2, USB. Home Screen trees returned 23 rows in
+  2.5–3.5 seconds. A checked Settings ref tap completed in 0.30 seconds. The subsequent
+  tree contained Settings controls. A batch containing Home and a tree read completed.
+  Opening Spotlight caused the previous Settings ref to be rejected with `targetChanged`
+  and `inputSent=false`. A read started during an app transition initially timed out.
+  Empty or mismatched dump pairs now trigger one fresh subscription within a total
+  25-second read budget, and the repeated navigation test completed.
+- iPhone 13, iOS 27.2, Wi-Fi. A tree read returned 26 rows in 8.1 seconds and the screen
+  stream remained available. This run exercised session readiness and read-only AX access.
+- On the Wi-Fi sample, serialized frame payloads were 374,026 bytes for full JPEG,
+  47,216 bytes for preview and 280 bytes for metadata only. USB samples were 131,830,
+  41,501 and 276 bytes respectively. Content and JSON sizes vary with the screen.
+- Tests cover moved, hidden, disabled, changed-value and covered targets, a tree push
+  during admission, malformed archives, incomplete trees, ref expiry, cross-device refs,
+  response modes, batch validation, first-failure stopping and cancellation. These tests
+  use synthetic data and fake input connections.
+
+Ref admission uses on-device element tokens because a hit-test can create a new translation
+object ID. Live replies can omit their associated target, so each AX channel permits one
+pending request, waits for its DTX acknowledgement and closes after any request timeout.
+A final hit-test precedes HID dispatch. External changes can race this boundary.
+
+A clean dependency install selected pymobiledevice3 11.52.1 and exposed an incompatible
+`_broadcast_frame` callback signature. The release pins 11.49.5 to retain the verified
+stream integration.
+
+Validation remains limited to the devices and screens above. Landscape AX geometry,
+long sessions, keyboard-heavy screens and third-party app coverage need further physical
+validation.

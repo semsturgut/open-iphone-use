@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.0 — Accessibility refs and compact agent calls
+
+- Add a Python DTX accessibility layer on the existing CoreDevice RSD connection, using
+  `com.apple.accessibility.axAuditDaemon.remoteAXService`. Admit matching initial and
+  additional tree dumps and return compact `ref|action|role|label|value` rows.
+- Add `get_ui_tree` and `tap_ref`. Ref taps check live element token, label, value, geometry,
+  enabled state and visibility, with frontmost hit testing before HID delivery. Rejected
+  checks send no touch or cleanup input. Refs expire after 120 seconds or reconnect.
+- Add serialized batches of up to 16 steps, upfront syntax validation, per-step receipts,
+  cancellation and stop-on-first-failure behavior.
+- Add `image_mode` with full JPEG, 640-pixel preview and metadata-only options. Include a
+  native JPEG SHA-256 screen hash. Existing tools keep full images by default, and the new
+  tree, ref and batch tools default to metadata-only responses.
+- Reduce USB post-input frame latency from 150 ms to 30 ms. Wi-Fi keeps 150 ms. Remove the
+  additional 200 ms sleep after swipes and scrolls, retaining post-input frame checks.
+- Update the bundled agent skill for accessibility-first use and ship AXe's MIT attribution.
+- Pin pymobiledevice3 to the physically verified 11.49.5. Version 11.52.1 changes the
+  private frame callback signature used by the current stream integration.
+- Preserve existing pairing, USB/Wi-Fi tunnel selection and connection startup paths.
+
 ## 0.1.1 — Cooler Wi-Fi streaming
 
 - Cap the Wi-Fi screen stream at 2 Mbit/s (USB stays at 6 Mbit/s): about half the radio traffic,

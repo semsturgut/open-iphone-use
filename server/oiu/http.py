@@ -1,5 +1,4 @@
 """Loopback-only Web UI and API: device list, live MJPEG, snapshots and actions."""
-import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import ipaddress
@@ -7,9 +6,9 @@ from pathlib import Path
 import sys
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
-from . import vision
+from .frames import frame_payload
 
 WEB = Path(__file__).parent / "web"
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
@@ -187,17 +186,16 @@ class Handler(BaseHTTPRequestHandler):
                         if not device.jpeg:
                             raise ValueError("No frame received")
                         summary = device.summary()
-                        width, height = vision.dimensions(device.jpeg)
-                        return self.reply(dict(ok=True, device=summary, frame=dict(
-                            frameID=device.frame_id, ageMilliseconds=summary["age_ms"], captureActive=summary["capture_active"],
-                            width=width, height=height, base64=base64.b64encode(device.jpeg).decode(), mimeType="image/jpeg")))
+                        mode = parse_qs(urlsplit(self.path).query).get('image_mode', ['full'])[0]
+                        return self.reply(dict(ok=True, device=summary, frame=frame_payload(device.jpeg, mode,
+                            frameID=device.frame_id, ageMilliseconds=summary["age_ms"], captureActive=summary["capture_active"])))
                 if not post and parts[3] == "stream":
                     return self.stream(device)
                 if not post and parts[3] == "frame":
                     with device.lock:
                         return self.reply(device.jpeg, mime="image/jpeg")
                 if post and parts[3] == "action":
-                    data = json.loads(self.body(8192))
+                    data = json.loads(self.body(32768))
                     return self.reply(device.action(data["operation"], data.get("arguments", {})))
                 if not post and parts[3] == "status":
                     return self.reply(dict(device=device.summary(), backend=device.backend.request("get_device_status")))
